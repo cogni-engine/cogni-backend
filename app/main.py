@@ -362,3 +362,12 @@ async def get_notes():
     data = supabase.table("notes").select("*").execute()
     return data.data
 
+
+
+id
+threadId
+role: "user" | "assistant"
+content
+meta
+createdAt
+[key: string]: unknown
