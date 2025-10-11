@@ -1,4 +1,7 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from app.config import supabase
 from app.models import (
     ChatRequest, ChatResponse, Task, TaskUpdateRequest, TaskUpdateResponse,
@@ -9,13 +12,37 @@ from app.services import (
     generate_notifications_from_task, generate_notifications_from_tasks, update_notification_status,
     analyze_task_for_notification_updates, execute_notification_updates
 )
+from app.services.test.simple_agent import simple_agent_chat, StreamTestRequest
 from app.data.mock_data import chat_history, mock_tasks, mock_notifications, focused_task_id
 
 app = FastAPI()
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For development - specify your frontend URL in production
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods including OPTIONS
+    allow_headers=["*"],
+)
+
+
 @app.get("/")
 def read_root():
     return {"message": "Hello, World!"}
+
+@app.post("/test/stream")
+async def test_stream(request: StreamTestRequest):
+    """Test endpoint to showcase streaming LLM responses with LangGraph"""
+    
+    return StreamingResponse(
+        simple_agent_chat(request.system_message, request.prompt),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 @app.post("/engine")
 async def engine():
