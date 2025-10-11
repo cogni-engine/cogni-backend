@@ -106,10 +106,7 @@ async def update_tasks_from_note(request: TaskUpdateRequest):
         "summary": summary
     }
 
-@app.get("/notes")
-async def get_notes():
-    data = supabase.table("notes").select("*").execute()
-    return data.data
+
 
 # ============================================
 # 通知（Notification）関連エンドポイント

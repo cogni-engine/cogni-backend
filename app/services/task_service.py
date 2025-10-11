@@ -3,7 +3,7 @@ import datetime
 from typing import List, Dict, Optional, Any
 from app.config import openai_client
 from app.data.mock_data import chat_history, mock_tasks
-from app.models.task import TaskUpdate
+from app.models.task import BulkTaskUpdate
 
 async def run_engine() -> Optional[int]:
     """タスクフォーカスエンジンを実行"""
@@ -67,7 +67,7 @@ async def run_engine() -> Optional[int]:
 
     return data_module.focused_task_id
 
-async def analyze_note_for_task_updates(note_content: str, current_tasks: List[Dict]) -> List[TaskUpdate]:
+async def analyze_note_for_task_updates(note_content: str, current_tasks: List[Dict]) -> List[BulkTaskUpdate]:
     """Noteの内容を分析してタスクの変更を検出"""
     
     # 現在のタスクを安全な形式に変換
@@ -177,9 +177,9 @@ Note内容:
     result = resp.choices[0].message.content
     data = json.loads(result)
     
-    return [TaskUpdate(**update) for update in data["updates"]]
+    return [BulkTaskUpdate(**update) for update in data["updates"]]
 
-async def execute_task_updates(updates: List[TaskUpdate]) -> Dict[str, Any]:
+async def execute_task_updates(updates: List[BulkTaskUpdate]) -> Dict[str, Any]:
     """タスク更新を実行"""
     
     results = {

@@ -2,7 +2,7 @@ import json
 import datetime
 from typing import List, Dict, Any
 from app.config import openai_client
-from app.models.notification import NotificationStatus, NotificationUpdate
+from app.models.notification import NotificationStatus, BulkNotificationUpdate
 
 async def generate_notifications_from_task(task: Dict, user_id: str = "user_123") -> List[Dict]:
     """
@@ -175,7 +175,7 @@ async def update_notification_status(notification_id: int, status: NotificationS
     return notification
 
 
-async def analyze_task_for_notification_updates(task: Dict, current_notifications: List[Dict]) -> List[NotificationUpdate]:
+async def analyze_task_for_notification_updates(task: Dict, current_notifications: List[Dict]) -> List[BulkNotificationUpdate]:
     """
     タスクの内容を分析して通知の変更を検出
     
@@ -311,10 +311,10 @@ async def analyze_task_for_notification_updates(task: Dict, current_notification
     result = resp.choices[0].message.content
     data = json.loads(result)
     
-    return [NotificationUpdate(**update) for update in data["updates"]]
+    return [BulkNotificationUpdate(**update) for update in data["updates"]]
 
 
-async def execute_notification_updates(updates: List[NotificationUpdate], notifications: List[Dict]) -> Dict[str, Any]:
+async def execute_notification_updates(updates: List[BulkNotificationUpdate], notifications: List[Dict]) -> Dict[str, Any]:
     """
     通知更新を実行
     

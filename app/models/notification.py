@@ -1,25 +1,14 @@
 from pydantic import BaseModel
 from enum import Enum
 from typing import List, Optional, Dict, Any
+from datetime import datetime
+
 
 class NotificationStatus(str, Enum):
-    scheduled = "scheduled"
-    delivered = "delivered"
-    read = "read"
-    archived = "archived"
-
-class Notification(BaseModel):
-    id: int
-    title: str
-    content: str
-    user_id: str
-    meta: Optional[Dict[str, Any]] = None
-    due_date: Optional[str] = None  # ISO format string
-    createdAt: str
-    updatedAt: str
-    status: NotificationStatus
-    task_id: Optional[int] = None
-    suggestions: Optional[List[str]] = None
+    """Notification status enum"""
+    SCHEDULED = "SCHEDULED"
+    SENT = "SENT"
+    RESOLVED = "RESOLVED"
 
 class NotificationCreateRequest(BaseModel):
     task_id: int
@@ -27,7 +16,7 @@ class NotificationCreateRequest(BaseModel):
 class NotificationUpdateStatusRequest(BaseModel):
     status: NotificationStatus
 
-class NotificationUpdate(BaseModel):
+class BulkNotificationUpdate(BaseModel):
     action: str  # "create", "update", "delete"
     notification_id: Optional[int] = None  # update/deleteの場合のみ
     notification_data: Optional[Dict[str, Any]] = None  # create/updateの場合のみ
@@ -39,4 +28,36 @@ class NotificationAnalysisRequest(BaseModel):
 class NotificationAnalysisResponse(BaseModel):
     updates: List[Dict[str, Any]]
     summary: str
+
+class NotificationBase(BaseModel):
+    """Base notification fields"""
+    title: str
+    content: str
+    due_date: datetime
+    task_id: int
+    user_id: str  # UUID as string
+    status: NotificationStatus = NotificationStatus.SCHEDULED
+
+
+class NotificationCreate(NotificationBase):
+    """Notification creation model"""
+    pass
+
+
+class NotificationUpdate(BaseModel):
+    """Notification update model - all fields optional"""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    due_date: Optional[datetime] = None
+    status: Optional[NotificationStatus] = None
+
+
+class Notification(NotificationBase):
+    """Complete notification model from database"""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
 

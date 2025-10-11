@@ -20,6 +20,12 @@ openai = "*"
 fastapi = "*"
 uvicorn = { extras = ["standard"], version = "*" }
 supabase = "*"
+python-dotenv = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+pytest-cov = "^4.1.0"
 
 [build-system]
 requires = ["poetry-core"]
