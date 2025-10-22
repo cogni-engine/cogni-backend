@@ -23,6 +23,18 @@ TIMER_REQUEST_ADDITION = """
 """
 
 
+TIMER_STARTED_ADDITION = """
+
+【タイマー設定完了】
+{duration_display}のタイマーを設定しました。
+ユーザーの作業を応援し、時間になったら声をかける旨を簡潔に伝えてください。
+
+例：
+- 「{duration_display}のタイマーを設定しました！集中して頑張ってください」
+- 「タイマーをセットしましたので、時間になったらお声がけしますね」
+"""
+
+
 TIMER_COMPLETED_ADDITION = """
 
 【タイマー完了 - マネジメントチェックイン】
@@ -88,6 +100,9 @@ NOTIFICATION_TRIGGERED_ADDITION = """
 def build_conversation_prompt(
     focused_task: Optional[Task] = None,
     should_ask_timer: bool = False,
+    timer_started: bool = False,
+    timer_duration: Optional[int] = None,
+    timer_duration_display: Optional[str] = None,
     timer_completed: bool = False,
     notification_triggered: bool = False,
     notification_context: Optional[Notification] = None,
@@ -99,6 +114,8 @@ def build_conversation_prompt(
     Args:
         focused_task: Task to focus on, or None
         should_ask_timer: Whether to ask user about timer duration
+        timer_started: Whether timer was just started
+        timer_duration: Duration of started timer in minutes
         timer_completed: Whether timer has just completed (triggers management check-in)
         notification_triggered: Whether notification was triggered
         notification_context: Single notification context (for click)
@@ -175,6 +192,10 @@ def build_conversation_prompt(
     # Add timer request if needed
     if should_ask_timer:
         base_prompt += TIMER_REQUEST_ADDITION
+    
+    # Add timer started confirmation if needed
+    if timer_started and timer_duration_display:
+        base_prompt += TIMER_STARTED_ADDITION.format(duration_display=timer_duration_display)
     
     # Add timer completion management instructions if needed
     if timer_completed:

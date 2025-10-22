@@ -37,4 +37,16 @@ class AIMessageRepository(BaseRepository[AIMessage, AIMessageCreate, AIMessageUp
         response = query.execute()
         messages = self._to_models(response.data)
         return list(reversed(messages))  # Return in chronological order
+    
+    async def find_since(self, thread_id: int, since_id: int) -> List[AIMessage]:
+        """Find messages in a thread since a specific message ID"""
+        query = (
+            self._client.table(self._table_name)
+            .select("*")
+            .eq("thread_id", thread_id)
+            .gt("id", since_id)
+            .order("created_at", desc=False)
+        )
+        response = query.execute()
+        return self._to_models(response.data)
 

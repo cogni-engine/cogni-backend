@@ -9,7 +9,7 @@ logging.basicConfig(
     force=True
 )
 
-from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi import FastAPI, Request, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -162,35 +162,37 @@ async def cogno_chat_stream_endpoint(request: AIChatRequest):
     
     Flow:
     1. Engine makes decision (focused_task_id, should_start_timer)
-    2. If should_start_timer=true, extract timer duration and start timer
-    3. Conversation AI responds with appropriate context
+    2. If should_start_timer=true, extract timer duration
+    3. Conversation AI responds with timer info in meta (no separate system message)
     """
     # Make engine decision with current user message
     decision = await make_engine_decision(request.thread_id, request.message)
     logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
     
-    # If engine decided to start timer, extract duration and start timer
+    # If engine decided to start timer, extract duration
+    timer_duration = None
     timer_started = False
     if decision.should_start_timer:
         timer_duration = extract_timer_duration(request.message)
         logging.info(f"Timer duration extraction result: {timer_duration} minutes" if timer_duration else "No duration found in message")
         if timer_duration:
-            # Start timer automatically
-            await start_timer(request.thread_id, timer_duration)
-            logging.info(f"✓ Timer started automatically: {timer_duration} minutes for thread {request.thread_id}")
             timer_started = True
+            logging.info(f"✓ Timer will be started: {timer_duration} minutes for thread {request.thread_id}")
     
     # Ask for timer duration only if engine wants timer but we couldn't extract duration
     should_ask_timer = decision.should_start_timer and not timer_started
-    logging.info(f"Conversation context: should_ask_timer={should_ask_timer}, timer_started={timer_started}")
+    logging.info(f"Conversation context: should_ask_timer={should_ask_timer}, timer_started={timer_started}, timer_duration={timer_duration}")
     
     # Stream conversation response with engine decision context
+    # Timer info will be saved in AI message meta, not as separate system message
     return StreamingResponse(
         conversation_stream(
             thread_id=request.thread_id,
             user_message=request.message,
             focused_task_id=decision.focused_task_id,
-            should_ask_timer=should_ask_timer
+            should_ask_timer=should_ask_timer,
+            timer_started=timer_started,
+            timer_duration=timer_duration
         ),
         media_type="text/event-stream",
         headers={
@@ -233,14 +235,50 @@ async def cogno_start_timer_endpoint(request: CognoStartTimerRequest):
 
 
 @app.get("/api/cogno/messages/{thread_id}")
-async def get_cogno_messages(thread_id: int):
-    """指定されたThreadのメッセージ一覧を取得（Cogno用）"""
+async def get_cogno_messages(
+    thread_id: int,
+    since: Optional[int] = Query(None, description="最後のメッセージID")
+):
+    """指定されたThreadのメッセージ一覧を取得（Cogno用）
+    
+    Args:
+        thread_id: Thread ID
+        since: Optional message ID - if provided, only returns messages after this ID
+    """
     from app.infra.supabase.repositories.ai_messages import AIMessageRepository
+    from app.services.cogno.timer.timer_manager import get_active_timer
     
     ai_message_repo = AIMessageRepository(supabase)
-    messages = await ai_message_repo.find_by_thread(thread_id)
     
-    return {"messages": messages}
+    if since:
+        messages = await ai_message_repo.find_since(thread_id, since)
+    else:
+        messages = await ai_message_repo.find_by_thread(thread_id)
+    
+    # Timer完了チェック（新規メッセージがない場合のみ）
+    if not messages:
+        logging.info(f"No new messages for thread {thread_id}, checking for expired timers")
+        timer_info = await get_active_timer(thread_id)
+        
+        # Timer完了が検出された場合、再取得して完了メッセージを含める
+        if timer_info and timer_info.get("timer_ended"):
+            logging.info(f"Timer completed for thread {thread_id}, refetching messages")
+            if since:
+                messages = await ai_message_repo.find_since(thread_id, since)
+            else:
+                messages = await ai_message_repo.find_by_thread(thread_id)
+    
+    # 重複メッセージを除去（念のため）
+    seen_ids = set()
+    unique_messages = []
+    for msg in messages:
+        if msg.id not in seen_ids:
+            seen_ids.add(msg.id)
+            unique_messages.append(msg)
+        else:
+            logging.warning(f"Duplicate message ID {msg.id} detected and filtered")
+    
+    return {"messages": unique_messages}
 
 
 # ============================================

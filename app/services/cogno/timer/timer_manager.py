@@ -1,6 +1,6 @@
 """Timer Manager - Manages timer lifecycle"""
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from app.infra.supabase.client import get_supabase_client
@@ -89,7 +89,7 @@ async def get_active_timer(thread_id: int) -> Optional[Dict[str, Any]]:
                     
                     # Check if timer has ended
                     ends_at = datetime.fromisoformat(timer_state.ends_at)
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
                     
                     if now >= ends_at:
                         # Timer has ended - mark as completed and trigger follow-up

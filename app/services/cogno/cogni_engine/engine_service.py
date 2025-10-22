@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from app.infra.supabase.client import get_supabase_client
 from app.infra.supabase.repositories.threads import ThreadRepository
@@ -143,7 +143,7 @@ async def _call_llm_for_decision(
         return EngineDecision(focused_task_id=None, should_start_timer=False)
 
 
-def extract_timer_duration(message: str) -> Optional[int]:
+def extract_timer_duration(message: str) -> Optional[Union[int, float]]:
     """
     Extract timer duration from user message.
     
@@ -151,31 +151,33 @@ def extract_timer_duration(message: str) -> Optional[int]:
         message: User message to extract duration from
         
     Returns:
-        Duration in minutes, or None if no time pattern found
+        Duration in minutes (int) or seconds (float), or None if no time pattern found
         
     Examples:
-        "30分集中します" -> 30
-        "1時間作業する" -> 60
-        "2時間やります" -> 120
+        "30分集中します" -> 30 (分)
+        "1時間作業する" -> 60 (分)
+        "30秒テスト" -> 30.0 (秒)
+        "30" -> 30 (分として扱う)
     """
-    # 正規表現で時間を検出: 数字 + (分|時間|min|hour) または 数字のみ
-    time_match = re.search(r'(\d+)\s*(分|時間|min|hour)', message, re.IGNORECASE)
+    # 正規表現で時間を検出: 数字 + (秒|分|時間|sec|min|hour) または 数字のみ
+    time_match = re.search(r'(\d+)\s*(秒|分|時間|sec|min|hour)', message, re.IGNORECASE)
     
     if time_match:
         value = int(time_match.group(1))
         unit = time_match.group(2).lower()
         
-        # 分単位に変換
-        minutes = value * 60 if unit in ['時間', 'hour'] else value
-        logger.info(f"Extracted timer duration: {minutes} minutes from '{message}'")
-        return minutes
+        # 単位に応じて返す
+        if unit in ['時間', 'hour']:
+            return value * 60  # 分単位
+        elif unit in ['秒', 'sec']:
+            return float(value)  # 秒単位
+        else:  # 分|min
+            return value  # 分単位
     
-    # 数字のみの場合（時間回答として扱う）
+    # 数字のみの場合（分として扱う）
     number_match = re.search(r'^(\d+)$', message.strip())
     if number_match:
-        minutes = int(number_match.group(1))
-        logger.info(f"Extracted timer duration (number only): {minutes} minutes from '{message}'")
-        return minutes
+        return int(number_match.group(1))  # 分単位
     
     return None
 

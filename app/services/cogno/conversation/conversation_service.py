@@ -1,6 +1,6 @@
 """Conversation Service - User-facing AI chat with streaming"""
 import logging
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import AsyncGenerator, List, Dict, Optional, Union
 
 from app.models.ai_message import AIMessage, AIMessageCreate, MessageRole
 from app.models.task import Task
@@ -21,6 +21,9 @@ async def conversation_stream(
     user_message: Optional[str] = None,
     focused_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
+    timer_started: bool = False,
+    timer_duration: Optional[Union[int, float]] = None,
+    timer_duration_display: Optional[str] = None,
     timer_completed: bool = False,
     notification_triggered: bool = False,
     notification_context: Optional[Notification] = None,
@@ -34,6 +37,8 @@ async def conversation_stream(
         user_message: User's message content (None for system triggers)
         focused_task_id: Task ID to focus on (from engine decision)
         should_ask_timer: Whether to ask user about timer duration (from engine decision)
+        timer_started: Whether timer was just started
+        timer_duration: Duration of started timer in minutes
         timer_completed: Whether timer has just completed (triggers management check-in)
         notification_triggered: Whether notification was triggered (click or daily)
         notification_context: Notification object for single notification click
@@ -77,6 +82,9 @@ async def conversation_stream(
         system_content = build_conversation_prompt(
             focused_task=focused_task,
             should_ask_timer=should_ask_timer,
+            timer_started=timer_started,
+            timer_duration=timer_duration,
+            timer_duration_display=timer_duration_display,
             timer_completed=timer_completed,
             notification_triggered=notification_triggered,
             notification_context=notification_context,
@@ -85,7 +93,7 @@ async def conversation_stream(
         messages.append({"role": "system", "content": system_content})
         
         logger.info(f"Using model: {STREAM_CHAT_MODEL}")
-        logger.info(f"should_ask_timer: {should_ask_timer}, timer_completed: {timer_completed}, notification_triggered: {notification_triggered}")
+        logger.info(f"should_ask_timer: {should_ask_timer}, timer_started: {timer_started}, timer_duration: {timer_duration}, timer_completed: {timer_completed}, notification_triggered: {notification_triggered}")
         
         # Stream LLM response
         llm_service = LLMService(model=STREAM_CHAT_MODEL, temperature=0.7)
@@ -99,9 +107,44 @@ async def conversation_stream(
         
         # Save assistant response
         if full_response:
-            # Add notification_trigger flag to meta if notification was triggered
             meta = None
-            if notification_triggered:
+            
+            # Add timer info if timer was started
+            if timer_started and timer_duration:
+                from datetime import datetime, timedelta
+                
+                started_at = datetime.utcnow()
+                
+                # timer_durationが秒単位か分単位かを判定
+                if isinstance(timer_duration, float):
+                    # 秒単位の場合
+                    ends_at = started_at + timedelta(seconds=timer_duration)
+                    duration_display = f"{int(timer_duration)}秒"
+                    unit = "seconds"
+                else:
+                    # 分単位の場合
+                    ends_at = started_at + timedelta(minutes=timer_duration)
+                    duration_display = f"{timer_duration}分"
+                    unit = "minutes"
+                
+                # timer_duration_displayが既に設定されている場合はそれを使用
+                if timer_duration_display:
+                    duration_display = timer_duration_display
+                
+                meta = {
+                    "timer": {
+                        "duration_minutes": timer_duration if isinstance(timer_duration, int) else timer_duration / 60,
+                        "duration_seconds": timer_duration if isinstance(timer_duration, float) else timer_duration * 60,
+                        "started_at": started_at.isoformat() + 'Z',
+                        "ends_at": ends_at.isoformat() + 'Z',
+                        "status": "active",
+                        "unit": unit
+                    }
+                }
+                logger.info(f"Timer meta added to AI message: {duration_display}, ends_at: {ends_at.isoformat()}")
+            
+            # Add notification_trigger flag to meta if notification was triggered
+            elif notification_triggered:
                 meta = {"notification_trigger": True}
             
             assistant_msg_create = AIMessageCreate(
