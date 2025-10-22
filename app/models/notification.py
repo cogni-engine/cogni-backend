@@ -6,9 +6,9 @@ from datetime import datetime
 
 class NotificationStatus(str, Enum):
     """Notification status enum"""
-    SCHEDULED = "SCHEDULED"
-    SENT = "SENT"
-    RESOLVED = "RESOLVED"
+    SCHEDULED = "scheduled"  
+    SENT = "sent"            
+    RESOLVED = "resolved"    
 
 class NotificationCreateRequest(BaseModel):
     task_id: int

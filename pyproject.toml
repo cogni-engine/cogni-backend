@@ -16,11 +16,13 @@ matplotlib = "*"
 llama-index = "*"
 langchain-core = "*"
 langchain = "*"
+langchain-openai = "*"
 openai = "*"
 fastapi = "*"
 uvicorn = { extras = ["standard"], version = "*" }
 supabase = "*"
 python-dotenv = "*"
+pydantic = "^2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

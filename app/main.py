@@ -1,11 +1,23 @@
-from fastapi import FastAPI
+import json
+import asyncio
+import logging
+
+# ログ設定（他のimportの前に）
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
+)
+
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from app.config import supabase
+from typing import List, Dict, Optional
+from app.config import supabase, WEBHOOK_SECRET
 from app.models import (
     ChatRequest, ChatResponse, Task, TaskUpdateRequest, TaskUpdateResponse,
-    NotificationCreateRequest, NotificationUpdateStatusRequest, NotificationAnalysisRequest, NotificationAnalysisResponse
+    Notification, NotificationCreateRequest, NotificationUpdateStatusRequest, NotificationAnalysisRequest, NotificationAnalysisResponse
 )
 from app.services import (
     handle_chat, run_engine, analyze_note_for_task_updates, execute_task_updates,
@@ -13,7 +25,70 @@ from app.services import (
     analyze_task_for_notification_updates, execute_notification_updates
 )
 from app.services.test.simple_agent import simple_agent_chat, StreamTestRequest
+from app.services.note_to_task import generate_tasks_from_note
+from app.services.task_to_notification import (
+    generate_notifications_from_task as generate_notifications_from_task_ai,
+    process_task_queue_for_notifications
+)
+from app.services.ai_chat.ai_chat_service import ai_chat_stream
+from app.services.cogno.cogni_engine.engine_service import make_engine_decision, extract_timer_duration
+from app.services.cogno.conversation.conversation_service import conversation_stream
+from app.services.cogno.timer.timer_manager import start_timer, get_active_timer
+from app.services.cogno.notification.notification_service import handle_notification_click, daily_notification_check
 from app.data.mock_data import chat_history, mock_tasks, mock_notifications, focused_task_id
+from app.infra.supabase.repositories.workspaces import WorkspaceRepository
+
+
+# Request/Response models for note-to-task endpoint
+class GenerateTasksRequest(BaseModel):
+    note_id: int
+    user_id: str
+
+
+class GenerateTasksResponse(BaseModel):
+    tasks: List[Task]  # TaskCreate から Task に変更
+    count: int
+
+
+# Request/Response models for task-to-notification endpoint
+class GenerateNotificationsRequest(BaseModel):
+    task_id: int
+    user_id: str
+
+
+class GenerateNotificationsResponse(BaseModel):
+    notifications: List[Notification]
+    count: int
+
+
+# Request model for AI chat streaming endpoint
+class AIChatRequest(BaseModel):
+    thread_id: int
+    message: str
+
+
+# Request models for Cogno endpoints
+class CognoStartTimerRequest(BaseModel):
+    thread_id: int
+    duration_minutes: int
+    message_id: Optional[int] = None
+
+
+class NotificationTriggerRequest(BaseModel):
+    notification_id: int
+    thread_id: int
+
+
+class DailyCheckRequest(BaseModel):
+    workspace_id: int
+
+
+# タスク通知生成キュー
+task_notification_queue: Dict[int, int] = {}  # {task_id: source_note_id}
+queue_lock = asyncio.Lock()
+processing_task: Optional[asyncio.Task] = None
+DEBOUNCE_SECONDS = 10
+
 
 app = FastAPI()
 
@@ -43,6 +118,175 @@ async def test_stream(request: StreamTestRequest):
             "Connection": "keep-alive",
         }
     )
+
+
+@app.post("/api/ai-chat/stream")
+async def ai_chat_stream_endpoint(request: AIChatRequest):
+    """
+    Thread IDベースでAIチャットのストリーミングレスポンスを返すエンドポイント
+    
+    - thread_idから履歴を取得
+    - ユーザーメッセージを保存
+    - AIレスポンスをストリームで返す
+    - 完全なレスポンスをデータベースに保存
+    """
+    return StreamingResponse(
+        ai_chat_stream(request.thread_id, request.message),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.get("/api/ai-chat/messages/{thread_id}")
+async def get_ai_messages(thread_id: int):
+    """指定されたThreadのメッセージ一覧を取得"""
+    from app.infra.supabase.repositories.ai_messages import AIMessageRepository
+    
+    ai_message_repo = AIMessageRepository(supabase)
+    messages = await ai_message_repo.find_by_thread(thread_id)
+    
+    return {"messages": messages}
+
+
+# ============================================
+# Cogno Endpoints (新しいアーキテクチャ)
+# ============================================
+
+@app.post("/api/cogno/chat/stream")
+async def cogno_chat_stream_endpoint(request: AIChatRequest):
+    """
+    Cogno chat stream endpoint with engine decision.
+    
+    Flow:
+    1. Engine makes decision (focused_task_id, should_start_timer)
+    2. If should_start_timer=true, extract timer duration and start timer
+    3. Conversation AI responds with appropriate context
+    """
+    # Make engine decision with current user message
+    decision = await make_engine_decision(request.thread_id, request.message)
+    logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
+    
+    # If engine decided to start timer, extract duration and start timer
+    timer_started = False
+    if decision.should_start_timer:
+        timer_duration = extract_timer_duration(request.message)
+        logging.info(f"Timer duration extraction result: {timer_duration} minutes" if timer_duration else "No duration found in message")
+        if timer_duration:
+            # Start timer automatically
+            await start_timer(request.thread_id, timer_duration)
+            logging.info(f"✓ Timer started automatically: {timer_duration} minutes for thread {request.thread_id}")
+            timer_started = True
+    
+    # Ask for timer duration only if engine wants timer but we couldn't extract duration
+    should_ask_timer = decision.should_start_timer and not timer_started
+    logging.info(f"Conversation context: should_ask_timer={should_ask_timer}, timer_started={timer_started}")
+    
+    # Stream conversation response with engine decision context
+    return StreamingResponse(
+        conversation_stream(
+            thread_id=request.thread_id,
+            user_message=request.message,
+            focused_task_id=decision.focused_task_id,
+            should_ask_timer=should_ask_timer
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.get("/api/cogno/timers/poll")
+async def cogno_timer_poll(thread_id: int):
+    """
+    Poll for active timer status.
+    Returns timer info with remaining time or timer_ended flag.
+    """
+    timer_info = await get_active_timer(thread_id)
+    
+    if not timer_info:
+        return {"timer": None, "timer_ended": False}
+    
+    return timer_info
+
+
+@app.post("/api/cogno/timers/start")
+async def cogno_start_timer_endpoint(request: CognoStartTimerRequest):
+    """
+    Start a new timer for a thread.
+    Called when user provides duration (e.g., "30分").
+    """
+    timer_state = await start_timer(
+        request.thread_id,
+        request.duration_minutes,
+        request.message_id
+    )
+    
+    return {
+        "success": True,
+        "timer": timer_state.dict()
+    }
+
+
+@app.get("/api/cogno/messages/{thread_id}")
+async def get_cogno_messages(thread_id: int):
+    """指定されたThreadのメッセージ一覧を取得（Cogno用）"""
+    from app.infra.supabase.repositories.ai_messages import AIMessageRepository
+    
+    ai_message_repo = AIMessageRepository(supabase)
+    messages = await ai_message_repo.find_by_thread(thread_id)
+    
+    return {"messages": messages}
+
+
+# ============================================
+# Notification Endpoints (Cogno統合)
+# ============================================
+
+@app.post("/api/cogno/notification/trigger")
+async def cogno_notification_trigger(request: NotificationTriggerRequest):
+    """
+    Handle notification click event.
+    Generates AI conversation response and marks notification as resolved.
+    
+    Flow:
+    1. Get notification details
+    2. Generate AI response using conversation_stream
+    3. Mark notification as resolved
+    """
+    try:
+        await handle_notification_click(
+            notification_id=request.notification_id,
+            thread_id=request.thread_id
+        )
+        return {"success": True, "message": "Notification processed"}
+    except Exception as e:
+        logging.error(f"Error in notification trigger: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cogno/notification/daily-check")
+async def cogno_daily_notification_check(request: DailyCheckRequest):
+    """
+    Daily notification check endpoint.
+    Called at 10:00 AM JST by external scheduler.
+    
+    Flow:
+    1. Check latest message in workspace's latest thread
+    2. If not notification-triggered, summarize pending notifications
+    3. Generate AI message with summary
+    """
+    try:
+        await daily_notification_check(workspace_id=request.workspace_id)
+        return {"success": True, "message": "Daily check completed"}
+    except Exception as e:
+        logging.error(f"Error in daily notification check: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/engine")
 async def engine():
@@ -133,6 +377,53 @@ async def update_tasks_from_note(request: TaskUpdateRequest):
         "summary": summary
     }
 
+
+# ============================================
+# Note to Task AI エンドポイント
+# ============================================
+
+@app.post("/api/notes/generate-tasks", response_model=GenerateTasksResponse)
+async def generate_tasks_endpoint(request: GenerateTasksRequest):
+    """指定されたnoteからAIでタスクを生成"""
+    from app.infra.supabase.repositories.notes import NoteRepository
+    
+    # noteを取得
+    note_repo = NoteRepository(supabase)
+    note = await note_repo.find_by_id(request.note_id)
+    
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    
+    tasks = await generate_tasks_from_note(request.note_id, note.text, request.user_id)
+    
+    return {
+        "tasks": tasks,
+        "count": len(tasks)
+    }
+
+
+# ============================================
+# Task to Notification AI エンドポイント
+# ============================================
+
+@app.post("/api/tasks/generate-notifications", response_model=GenerateNotificationsResponse)
+async def generate_notifications_endpoint(request: GenerateNotificationsRequest):
+    """特定のタスクからAIで通知を生成してデータベースに保存"""
+    from app.infra.supabase.repositories.tasks import TaskRepository
+    
+    # タスクを取得
+    task_repo = TaskRepository(supabase)
+    task = await task_repo.find_by_id(request.task_id)
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    notifications = await generate_notifications_from_task_ai(task)
+    
+    return {
+        "notifications": notifications,
+        "count": len(notifications)
+    }
 
 
 # ============================================
@@ -243,3 +534,113 @@ async def analyze_and_update_notifications(request: NotificationAnalysisRequest)
         "updates": [update.dict() for update in updates],
         "summary": summary
     }
+
+
+
+async def process_task_notification_queue():
+    """10秒待機後、キューをサービス層に渡して処理"""
+    global task_notification_queue
+    
+    await asyncio.sleep(DEBOUNCE_SECONDS)
+    
+    async with queue_lock:
+        if not task_notification_queue:
+            return
+        queue_copy = task_notification_queue.copy()
+        task_notification_queue.clear()
+    
+    await process_task_queue_for_notifications(queue_copy)
+
+
+@app.post("/webhooks/notes")
+async def notes_webhook(
+    request: Request,
+    x_webhook_secret: str = Header(None)
+):
+    """Supabase Webhookから呼ばれ、noteの内容を受け取ってAIタスクを生成（personalワークスペースのみ）"""
+    
+    # セキュリティチェック
+    if x_webhook_secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized webhook call")
+    
+    # Supabaseから送られたpayloadを受け取る
+    body = await request.json()
+    print("✅ Webhook received:", json.dumps(body, indent=2))
+    
+    # payloadから必要な情報を取得
+    record = body.get("record") or {}
+    note_id = record.get("id")
+    note_text = record.get("text", "")
+    workspace_id = record.get("workspace_id")
+
+    if not note_id:
+        raise HTTPException(status_code=400, detail="Missing note_id in payload")
+    
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="Missing workspace_id in payload")
+    
+    # WorkspaceRepositoryを使ってworkspaceを取得
+    workspace_repo = WorkspaceRepository(supabase)
+    workspace = await workspace_repo.find_by_id(workspace_id)
+    
+    if not workspace:
+        print(f"❌ Workspace {workspace_id} not found")
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    
+    # personalワークスペース以外はスキップ
+    if workspace.type != "personal":
+        print(f"🚫 Skipped webhook for workspace_id={workspace_id}, type={workspace.type}")
+        return {"status": "ignored", "reason": "Not personal workspace"}
+    
+    if not note_text:
+        print(f"⚠️ Note {note_id} has no text, skipping task generation")
+        return {"status": "skipped", "reason": "empty_note"}
+    
+    # TODO: 将来的にworkspace_idからuser_idを取得する処理を追加
+    user_id = "58e744e7-ec0f-45e1-a63a-bc6ed71e10de"  # 仮
+    
+    try:
+        # AIでタスクを生成（note_textを直接渡す）
+        tasks = await generate_tasks_from_note(note_id, note_text, user_id)
+        print(f"🧠 Generated {len(tasks)} tasks from note {note_id}")
+        return {"status": "ok", "generated_count": len(tasks)}
+    except Exception as e:
+        print(f"❌ Error generating tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Task generation failed: {str(e)}")
+
+
+@app.post("/webhooks/tasks")
+async def tasks_webhook(
+    request: Request,
+    x_webhook_secret: str = Header(None)
+):
+    """Supabase Webhookから呼ばれ、taskをキューに追加"""
+    global processing_task
+    
+    # セキュリティチェック
+    if x_webhook_secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized webhook call")
+    
+    body = await request.json()
+    record = body.get("record") or {}
+    
+    task_id = record.get("id")
+    source_note_id = record.get("source_note_id")
+    
+    if not task_id or not source_note_id:
+        print(f"⚠️ Invalid webhook payload: task_id={task_id}, source_note_id={source_note_id}")
+        return {"status": "ignored", "reason": "missing_required_fields"}
+    
+    # キューに追加
+    async with queue_lock:
+        task_notification_queue[task_id] = source_note_id
+        
+        # 既存の処理タスクをキャンセル
+        if processing_task and not processing_task.done():
+            processing_task.cancel()
+        
+        # 新しい処理タスクを起動
+        processing_task = asyncio.create_task(process_task_notification_queue())
+    
+    print(f"📝 Task {task_id} added to queue (total: {len(task_notification_queue)})")
+    return {"status": "queued", "task_id": task_id}

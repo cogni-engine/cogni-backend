@@ -7,9 +7,9 @@ from enum import Enum
 
 class MessageRole(str, Enum):
     """Message role enum"""
-    USER = "USER"
-    ASSISTANT = "ASSISTANT"
-    SYSTEM = "SYSTEM"
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
 
 
 class AIMessageBase(BaseModel):

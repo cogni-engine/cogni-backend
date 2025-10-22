@@ -12,7 +12,7 @@ class ThreadRepository(BaseRepository[Thread, ThreadCreate, ThreadUpdate]):
     """Repository for thread operations"""
     
     def __init__(self, client: Client):
-        super().__init__(client, "thread", Thread)
+        super().__init__(client, "threads", Thread)
     
     async def find_by_workspace(self, workspace_id: int) -> List[Thread]:
         """Find all threads in a workspace"""

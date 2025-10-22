@@ -5,7 +5,7 @@ from pydantic import BaseModel
 # Request model for streaming test
 class StreamTestRequest(BaseModel):
     prompt: str
-    system_message: str = "You are a helpful assistant."
+    system_message: str = "You are a helpful assistant.markdownで美しく回答してください。"
 
 
 

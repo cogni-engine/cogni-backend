@@ -27,4 +27,16 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
     async def find_by_note(self, note_id: int) -> List[Task]:
         """Find tasks created from a specific note"""
         return await self.find_by_filters({"source_note_id": note_id})
+    
+    async def delete_by_note(self, note_id: int) -> int:
+        """Delete all tasks associated with a specific note
+        
+        Args:
+            note_id: The note ID to delete tasks for
+            
+        Returns:
+            Number of deleted tasks
+        """
+        response = self._client.table(self._table_name).delete().eq("source_note_id", note_id).execute()
+        return len(response.data) if response.data else 0
 

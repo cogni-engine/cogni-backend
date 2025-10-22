@@ -8,10 +8,17 @@ from pydantic import BaseModel
 T = TypeVar('T', bound=BaseModel)
 
 class LLMService:
-    def __init__(self):
+    def __init__(self, model: str = "gpt-4o", temperature: float = 0.7):
+        """
+        Initialize LLM Service.
+        
+        Args:
+            model: Model name to use (default: "gpt-4o")
+            temperature: Sampling temperature (default: 0.7)
+        """
         self.llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0.7,
+            model=model,
+            temperature=temperature,
             streaming=True
         )
     
@@ -33,7 +40,6 @@ class LLMService:
         
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys
-            full_message_container: Optional list that will contain the full message at index 0 after streaming completes
             **kwargs: Additional arguments to pass to the LLM
             
         Yields:
@@ -47,14 +53,12 @@ class LLMService:
             for msg in messages
         ]
         
-        
         # Stream the response with SSE formatting
         async for chunk in self.llm.astream(lc_messages):
             if chunk.content:
                 yield f"data: {chunk.content}\n\n"
         # Send end signal
         yield "data: [DONE]\n\n"
-
 
 
     async def structured_invoke(self, messages: List[Dict[str, str]], schema: Type[T], **kwargs) -> T:

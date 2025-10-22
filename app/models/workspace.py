@@ -13,14 +13,14 @@ class WorkspaceType(str, Enum):
 
 class WorkspaceRole(str, Enum):
     """Workspace member role enum"""
-    OWNER = "OWNER"
-    MEMBER = "MEMBER"
+    OWNER = "owner"
+    MEMBER = "member"
 
 
 class WorkspaceBase(BaseModel):
     """Base workspace fields"""
     title: Optional[str] = None
-    type: WorkspaceType = WorkspaceType.GROUP
+    type: WorkspaceType = WorkspaceType.PERSONAL
 
 
 class WorkspaceCreate(WorkspaceBase):
