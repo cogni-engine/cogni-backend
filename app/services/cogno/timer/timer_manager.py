@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 async def start_timer(
     thread_id: int,
-    duration_minutes: int,
+    duration_seconds: int,
     message_id: Optional[int] = None
 ) -> TimerState:
     """
@@ -23,7 +23,7 @@ async def start_timer(
     
     Args:
         thread_id: Thread ID
-        duration_minutes: Timer duration in minutes
+        duration_seconds: Timer duration in seconds
         message_id: Optional AI message ID to attach timer to
         
     Returns:
@@ -35,20 +35,22 @@ async def start_timer(
     try:
         # Calculate timer times
         started_at = datetime.utcnow()
-        ends_at = started_at + timedelta(minutes=duration_minutes)
+        ends_at = started_at + timedelta(seconds=duration_seconds)
         
         # Create timer state
         timer_state = TimerState(
-            duration_minutes=duration_minutes,
+            duration_seconds=duration_seconds,
+            duration_minutes=duration_seconds / 60,  # 後方互換性のため
             started_at=started_at.isoformat(),
             ends_at=ends_at.isoformat(),
             status=TimerStatus.ACTIVE,
+            unit="seconds",
             message_id=message_id
         )
         
         # Create a system message with timer info
         timer_msg_create = AIMessageCreate(
-            content=f"タイマーを{duration_minutes}分で設定しました。",
+            content=f"タイマーを{duration_seconds}秒で設定しました。",
             thread_id=thread_id,
             role=MessageRole.ASSISTANT,
             meta={"timer": timer_state.dict()}
@@ -56,7 +58,7 @@ async def start_timer(
         created_msg = await ai_message_repo.create(timer_msg_create)
         timer_state.message_id = created_msg.id
         
-        logger.info(f"Timer started: {duration_minutes}min for thread {thread_id}, ends at {ends_at}")
+        logger.info(f"Timer started: {duration_seconds}sec for thread {thread_id}, ends at {ends_at}")
         return timer_state
         
     except Exception as e:
@@ -89,7 +91,8 @@ async def get_active_timer(thread_id: int) -> Optional[Dict[str, Any]]:
                     
                     # Check if timer has ended
                     ends_at = datetime.fromisoformat(timer_state.ends_at)
-                    now = datetime.now(timezone.utc)
+                    EARLY_COMPLETION_SECONDS = 3
+                    now = datetime.now(timezone.utc) + timedelta(seconds=EARLY_COMPLETION_SECONDS)
                     
                     if now >= ends_at:
                         # Timer has ended - mark as completed and trigger follow-up
@@ -139,7 +142,8 @@ async def _complete_timer(thread_id: int, message_id: int, timer_state: TimerSta
         async for chunk in conversation_stream(
             thread_id=thread_id,
             user_message=None,
-            timer_completed=True
+            timer_completed=True,
+            is_ai_initiated=True
         ):
             # Just consume the stream - conversation_stream will save the message
             pass

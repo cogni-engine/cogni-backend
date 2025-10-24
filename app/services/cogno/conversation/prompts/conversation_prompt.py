@@ -37,42 +37,22 @@ TIMER_STARTED_ADDITION = """
 
 TIMER_COMPLETED_ADDITION = """
 
-【タイマー完了 - マネジメントチェックイン】
-設定されたタイマーが完了しました。今があなたがユーザーの状況を確認し、サポートするタイミングです。
+【タイマー完了 - チェックイン】
+タイマーが完了しました。今こそユーザーの状況を確認し、なるべく簡潔に、適切にサポートしてください。
 
 【あなたがすべきこと】
-1. 作業の進捗状況を確認する
-   - 「時間になりましたね！作業はどうですか？」
-   - 「予定していたタスクは完了しましたか？」
-   - 進捗具合を具体的に聞く
+1. 作業やタスクの進捗を簡単に確認
+   - 例:「時間になりました！作業はいかがですか？」
+2. 状況に合わせた提案
+   - 完了なら称賛と次の一歩、途中なら残りや時間延長、詰まりがあればサポート
+   - 予定外なら優先度や今後の行動の相談
+3. 必要に応じてフィードバックや休憩も提案
 
-2. 状況に応じた対応
-   【完了した場合】
-   - 達成を称賛し、次のアクションを提案
-   - 学びや気づきがあるか確認
-   
-   【まだ途中の場合】
-   - どのくらい進んだか、残りの作業量を確認
-   - 時間延長の提案（例：「あと30分追加しましょうか？」）
-   - 詰まっているポイントがあれば、一緒に解決する
-   
-   【別のことをしていた場合】
-   - 優先順位の確認
-   - 当初のタスクに戻るか、予定を調整するか相談
+【ポイント】
+- 親しみやすく建設的、一緒に進める雰囲気で
+- 具体的な次のアクションを提案
 
-3. マネジメント視点でのフィードバック
-   - 時間見積もりと実際の差があれば、建設的にフィードバック
-   - 集中できた環境要因を聞く（今後の参考に）
-   - 次回に活かせるポイントを一緒に考える
-
-【コミュニケーションスタイル】
-- 親しみやすく、でも生産性を意識
-- 責めるのではなく、一緒に改善する姿勢
-- 具体的な次のアクションを明確にする
-- 必要に応じて、休憩やリフレッシュも提案
-
-【ゴール】
-タスクを完遂まで導き、ユーザーの生産性と成長をサポートすること。
+ユーザーが前向きに次に進めるようサポートしてください。
 """
 
 
@@ -93,7 +73,7 @@ NOTIFICATION_TRIGGERED_ADDITION = """
 - 「進捗はいかがですか？困っていることがあれば教えてください。」
 
 【ゴール】
-出力はダイレクトで短く、“通知”としてすぐ理解・行動できる形にしてください。とにかく短く、出力は5行に収まる程度にしてください。
+出力はダイレクトで短く、“通知”としてすぐ理解・行動できる形にしてください。出力は5行に収まる程度にしてください。
 """
 
 
@@ -101,8 +81,7 @@ def build_conversation_prompt(
     focused_task: Optional[Task] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
-    timer_duration: Optional[int] = None,
-    timer_duration_display: Optional[str] = None,
+    timer_duration: Optional[int] = None,  # 秒単位に統一
     timer_completed: bool = False,
     notification_triggered: bool = False,
     notification_context: Optional[Notification] = None,
@@ -115,7 +94,7 @@ def build_conversation_prompt(
         focused_task: Task to focus on, or None
         should_ask_timer: Whether to ask user about timer duration
         timer_started: Whether timer was just started
-        timer_duration: Duration of started timer in minutes
+        timer_duration: Duration of started timer in seconds
         timer_completed: Whether timer has just completed (triggers management check-in)
         notification_triggered: Whether notification was triggered
         notification_context: Single notification context (for click)
@@ -194,8 +173,25 @@ def build_conversation_prompt(
         base_prompt += TIMER_REQUEST_ADDITION
     
     # Add timer started confirmation if needed
-    if timer_started and timer_duration_display:
-        base_prompt += TIMER_STARTED_ADDITION.format(duration_display=timer_duration_display)
+    if timer_started and timer_duration:
+        # 時間・分・秒の表示用文字列を生成
+        def format_duration(seconds: int) -> str:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            remaining_seconds = seconds % 60
+            
+            parts = []
+            if hours > 0:
+                parts.append(f"{hours}時間")
+            if minutes > 0:
+                parts.append(f"{minutes}分")
+            if remaining_seconds > 0:
+                parts.append(f"{remaining_seconds}秒")
+            
+            return "".join(parts) if parts else "0秒"
+        
+        duration_display = format_duration(timer_duration)
+        base_prompt += TIMER_STARTED_ADDITION.format(duration_display=duration_display)
     
     # Add timer completion management instructions if needed
     if timer_completed:

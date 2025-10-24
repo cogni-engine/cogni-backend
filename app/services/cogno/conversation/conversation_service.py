@@ -1,6 +1,6 @@
 """Conversation Service - User-facing AI chat with streaming"""
 import logging
-from typing import AsyncGenerator, List, Dict, Optional, Union
+from typing import AsyncGenerator, List, Dict, Optional
 
 from app.models.ai_message import AIMessage, AIMessageCreate, MessageRole
 from app.models.task import Task
@@ -22,12 +22,12 @@ async def conversation_stream(
     focused_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
-    timer_duration: Optional[Union[int, float]] = None,
-    timer_duration_display: Optional[str] = None,
+    timer_duration: Optional[int] = None,  # 秒単位に統一
     timer_completed: bool = False,
     notification_triggered: bool = False,
     notification_context: Optional[Notification] = None,
     daily_summary_context: Optional[str] = None,
+    is_ai_initiated: bool = False,  # AI起点メッセージフラグ（見た目用）
 ) -> AsyncGenerator[str, None]:
     """
     Stream conversation AI response.
@@ -38,11 +38,12 @@ async def conversation_stream(
         focused_task_id: Task ID to focus on (from engine decision)
         should_ask_timer: Whether to ask user about timer duration (from engine decision)
         timer_started: Whether timer was just started
-        timer_duration: Duration of started timer in minutes
+        timer_duration: Duration of started timer in seconds
         timer_completed: Whether timer has just completed (triggers management check-in)
         notification_triggered: Whether notification was triggered (click or daily)
         notification_context: Notification object for single notification click
         daily_summary_context: Daily summary text for multiple notifications
+        is_ai_initiated: Whether this message is initiated by AI (for styling purposes)
         
     Yields:
         SSE-formatted stream chunks
@@ -84,7 +85,6 @@ async def conversation_stream(
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,
-            timer_duration_display=timer_duration_display,
             timer_completed=timer_completed,
             notification_triggered=notification_triggered,
             notification_context=notification_context,
@@ -114,31 +114,33 @@ async def conversation_stream(
                 from datetime import datetime, timedelta
                 
                 started_at = datetime.utcnow()
+                ends_at = started_at + timedelta(seconds=timer_duration)
                 
-                # timer_durationが秒単位か分単位かを判定
-                if isinstance(timer_duration, float):
-                    # 秒単位の場合
-                    ends_at = started_at + timedelta(seconds=timer_duration)
-                    duration_display = f"{int(timer_duration)}秒"
-                    unit = "seconds"
-                else:
-                    # 分単位の場合
-                    ends_at = started_at + timedelta(minutes=timer_duration)
-                    duration_display = f"{timer_duration}分"
-                    unit = "minutes"
+                # 時間・分・秒の表示用文字列を生成
+                def format_duration(seconds: int) -> str:
+                    hours = seconds // 3600
+                    minutes = (seconds % 3600) // 60
+                    remaining_seconds = seconds % 60
+                    
+                    parts = []
+                    if hours > 0:
+                        parts.append(f"{hours}時間")
+                    if minutes > 0:
+                        parts.append(f"{minutes}分")
+                    if remaining_seconds > 0:
+                        parts.append(f"{remaining_seconds}秒")
+                    
+                    return "".join(parts) if parts else "0秒"
                 
-                # timer_duration_displayが既に設定されている場合はそれを使用
-                if timer_duration_display:
-                    duration_display = timer_duration_display
+                duration_display = format_duration(timer_duration)
                 
                 meta = {
                     "timer": {
-                        "duration_minutes": timer_duration if isinstance(timer_duration, int) else timer_duration / 60,
-                        "duration_seconds": timer_duration if isinstance(timer_duration, float) else timer_duration * 60,
+                        "duration_seconds": timer_duration,
                         "started_at": started_at.isoformat() + 'Z',
                         "ends_at": ends_at.isoformat() + 'Z',
                         "status": "active",
-                        "unit": unit
+                        "unit": "seconds"
                     }
                 }
                 logger.info(f"Timer meta added to AI message: {duration_display}, ends_at: {ends_at.isoformat()}")
@@ -147,11 +149,17 @@ async def conversation_stream(
             elif notification_triggered:
                 meta = {"notification_trigger": True}
             
+            # Prepare meta data
+            final_meta = {}
+            if meta:
+                final_meta.update(meta)
+            final_meta["is_ai_initiated"] = is_ai_initiated
+            
             assistant_msg_create = AIMessageCreate(
                 content=full_response,
                 thread_id=thread_id,
                 role=MessageRole.ASSISTANT,
-                meta=meta
+                meta=final_meta
             )
             await ai_message_repo.create(assistant_msg_create)
             

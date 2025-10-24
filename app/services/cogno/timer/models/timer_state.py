@@ -14,11 +14,11 @@ class TimerStatus(str, Enum):
 
 class TimerState(BaseModel):
     """Timer state stored in AIMessage.meta"""
-    duration_minutes: float  # float型に変更（秒単位のTimer対応）
-    duration_seconds: Optional[int] = None  # 秒単位のTimer用
+    duration_seconds: int  # 秒単位に統一（必須）
+    duration_minutes: Optional[float] = None  # 分単位（オプション、後方互換性用）
     started_at: str  # ISO format datetime
     ends_at: str  # ISO format datetime
     status: TimerStatus = TimerStatus.ACTIVE
-    unit: str = "minutes"  # "minutes" or "seconds"
+    unit: str = "seconds"  # 秒単位に統一
     message_id: Optional[int] = None  # AI message that created this timer
 

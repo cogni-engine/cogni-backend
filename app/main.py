@@ -37,7 +37,8 @@ from app.services.cogno.timer.timer_manager import start_timer, get_active_timer
 from app.services.cogno.notification.notification_service import handle_notification_click, daily_notification_check
 from app.data.mock_data import chat_history, mock_tasks, mock_notifications, focused_task_id
 from app.infra.supabase.repositories.workspaces import WorkspaceRepository
-
+from app.infra.supabase.repositories.notifications import NotificationRepository
+from app.infra.supabase.client import get_supabase_client
 
 # Request/Response models for note-to-task endpoint
 class GenerateTasksRequest(BaseModel):
@@ -65,12 +66,13 @@ class GenerateNotificationsResponse(BaseModel):
 class AIChatRequest(BaseModel):
     thread_id: int
     message: str
+    notification_id: Optional[int] = None
 
 
 # Request models for Cogno endpoints
 class CognoStartTimerRequest(BaseModel):
     thread_id: int
-    duration_minutes: int
+    duration_seconds: int
     message_id: Optional[int] = None
 
 
@@ -161,10 +163,37 @@ async def cogno_chat_stream_endpoint(request: AIChatRequest):
     Cogno chat stream endpoint with engine decision.
     
     Flow:
-    1. Engine makes decision (focused_task_id, should_start_timer)
-    2. If should_start_timer=true, extract timer duration
-    3. Conversation AI responds with timer info in meta (no separate system message)
+    1. If notification_id provided: Skip engine decision, generate notification response
+    2. Otherwise: Engine makes decision (focused_task_id, should_start_timer)
+    3. If should_start_timer=true, extract timer duration
+    4. Conversation AI responds with timer info in meta (no separate system message)
     """
+    # Handle notification trigger
+    if request.notification_id:
+        supabase_client = get_supabase_client()
+        notification_repo = NotificationRepository(supabase_client)
+        notification = await notification_repo.find_by_id(request.notification_id)
+        
+        if notification:
+            logging.info(f"Notification trigger: {request.notification_id} - {notification.title}")
+            return StreamingResponse(
+                conversation_stream(
+                    thread_id=request.thread_id,
+                    user_message=None,
+                    notification_triggered=True,
+                    notification_context=notification,
+                    is_ai_initiated=True
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+        else:
+            logging.error(f"Notification {request.notification_id} not found")
+            raise HTTPException(status_code=404, detail="Notification not found")
+    
     # Make engine decision with current user message
     decision = await make_engine_decision(request.thread_id, request.message)
     logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
@@ -174,10 +203,10 @@ async def cogno_chat_stream_endpoint(request: AIChatRequest):
     timer_started = False
     if decision.should_start_timer:
         timer_duration = extract_timer_duration(request.message)
-        logging.info(f"Timer duration extraction result: {timer_duration} minutes" if timer_duration else "No duration found in message")
+        logging.info(f"Timer duration extraction result: {timer_duration} seconds" if timer_duration else "No duration found in message")
         if timer_duration:
             timer_started = True
-            logging.info(f"✓ Timer will be started: {timer_duration} minutes for thread {request.thread_id}")
+            logging.info(f"✓ Timer will be started: {timer_duration} seconds for thread {request.thread_id}")
     
     # Ask for timer duration only if engine wants timer but we couldn't extract duration
     should_ask_timer = decision.should_start_timer and not timer_started
@@ -224,7 +253,7 @@ async def cogno_start_timer_endpoint(request: CognoStartTimerRequest):
     """
     timer_state = await start_timer(
         request.thread_id,
-        request.duration_minutes,
+        request.duration_seconds,
         request.message_id
     )
     
@@ -326,95 +355,6 @@ async def cogno_daily_notification_check(request: DailyCheckRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/engine")
-async def engine():
-    fid = await run_engine()
-    return {"focused_task_id": fid}
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    return await handle_chat(request, focused_task_id, mock_tasks)
-
-# チャット履歴を取得するエンドポイント
-@app.get("/chat/history")
-async def get_chat_history():
-    return chat_history
-
-# チャット履歴をクリアするエンドポイント
-@app.delete("/chat/history")
-async def clear_chat_history():
-    chat_history.clear()
-    return {"message": "Chat history cleared"}
-
-# タスク一覧を取得するエンドポイント
-@app.get("/tasks")
-async def get_tasks():
-    return {"tasks": mock_tasks}
-
-# 特定のタスクを取得するエンドポイント
-@app.get("/tasks/{task_id}")
-async def get_task(task_id: int):
-    task = next((task for task in mock_tasks if task["id"] == task_id), None)
-    if task is None:
-        return {"error": "Task not found"}
-    return {"task": task}
-
-# タスクのステータスを更新するエンドポイント
-@app.put("/tasks/{task_id}/status")
-async def update_task_status(task_id: int, status: str):
-    task = next((task for task in mock_tasks if task["id"] == task_id), None)
-    if task is None:
-        return {"error": "Task not found"}
-    
-    task["status"] = status
-    return {"task": task}
-
-# 新しいタスクを作成するエンドポイント
-@app.post("/tasks")
-async def create_task(task: Task):
-    new_task = task.dict()
-    new_task["id"] = max([t["id"] for t in mock_tasks]) + 1 if mock_tasks else 1
-    mock_tasks.append(new_task)
-    return {"task": new_task}
-
-# Noteの内容からタスクを更新
-@app.post("/tasks/update-from-note", response_model=TaskUpdateResponse)
-async def update_tasks_from_note(request: TaskUpdateRequest):
-    """Noteの内容からタスクを更新"""
-    
-    # AIで変更を分析
-    updates = await analyze_note_for_task_updates(
-        request.note_content, 
-        request.current_tasks
-    )
-    
-    if not updates:
-        return {
-            "updates": [],
-            "summary": "変更は必要ありません"
-        }
-    
-    # タスク更新を実行
-    results = await execute_task_updates(updates)
-    
-    # サマリー生成
-    summary_parts = []
-    if results["created"]:
-        summary_parts.append(f"新規タスク {len(results['created'])}件作成")
-    if results["updated"]:
-        summary_parts.append(f"既存タスク {len(results['updated'])}件更新")
-    if results["deleted"]:
-        summary_parts.append(f"タスク {len(results['deleted'])}件削除")
-    if results["errors"]:
-        summary_parts.append(f"エラー {len(results['errors'])}件")
-    
-    summary = ", ".join(summary_parts) if summary_parts else "変更なし"
-    
-    return {
-        "updates": [update.dict() for update in updates],
-        "summary": summary
-    }
-
 
 # ============================================
 # Note to Task AI エンドポイント
@@ -468,20 +408,6 @@ async def generate_notifications_endpoint(request: GenerateNotificationsRequest)
 # 通知（Notification）関連エンドポイント
 # ============================================
 
-# 通知一覧を取得
-@app.get("/notifications")
-async def get_notifications():
-    """すべての通知を取得"""
-    return {"notifications": mock_notifications}
-
-# 特定の通知を取得
-@app.get("/notifications/{notification_id}")
-async def get_notification(notification_id: int):
-    """特定の通知を取得"""
-    notification = next((n for n in mock_notifications if n["id"] == notification_id), None)
-    if notification is None:
-        return {"error": "Notification not found"}
-    return {"notification": notification}
 
 # 特定のタスクから通知を生成
 @app.post("/notifications/generate-from-task")
@@ -505,73 +431,6 @@ async def generate_notifications_from_task_endpoint(request: NotificationCreateR
         "message": f"{len(notifications)}件の通知を生成しました"
     }
 
-# すべてのタスクから通知を一括生成
-@app.post("/notifications/generate-from-all-tasks")
-async def generate_notifications_from_all_tasks_endpoint():
-    """すべてのタスクから通知を一括生成"""
-    notifications = await generate_notifications_from_tasks(mock_tasks)
-    
-    # 既存の通知をクリアして新しい通知を追加
-    mock_notifications.clear()
-    mock_notifications.extend(notifications)
-    
-    return {
-        "notifications": notifications,
-        "count": len(notifications),
-        "message": f"全{len(mock_tasks)}タスクから{len(notifications)}件の通知を生成しました"
-    }
-
-# 通知のステータスを更新
-@app.put("/notifications/{notification_id}/status")
-async def update_notification_status_endpoint(notification_id: int, request: NotificationUpdateStatusRequest):
-    """通知のステータスを更新"""
-    result = await update_notification_status(notification_id, request.status, mock_notifications)
-    
-    if "error" in result:
-        return result
-    
-    return {
-        "notification": result,
-        "message": f"通知 #{notification_id} のステータスを {request.status} に更新しました"
-    }
-
-# タスク情報から通知を差分検出して更新
-@app.post("/notifications/analyze-and-update", response_model=NotificationAnalysisResponse)
-async def analyze_and_update_notifications(request: NotificationAnalysisRequest):
-    """タスク情報から通知の差分を検出して更新"""
-    
-    # AIで変更を分析
-    updates = await analyze_task_for_notification_updates(
-        request.task,
-        request.current_notifications
-    )
-    
-    if not updates:
-        return {
-            "updates": [],
-            "summary": "変更は必要ありません"
-        }
-    
-    # 通知更新を実行
-    results = await execute_notification_updates(updates, mock_notifications)
-    
-    # サマリー生成
-    summary_parts = []
-    if results["created"]:
-        summary_parts.append(f"新規通知 {len(results['created'])}件作成")
-    if results["updated"]:
-        summary_parts.append(f"既存通知 {len(results['updated'])}件更新")
-    if results["deleted"]:
-        summary_parts.append(f"通知 {len(results['deleted'])}件削除")
-    if results["errors"]:
-        summary_parts.append(f"エラー {len(results['errors'])}件")
-    
-    summary = ", ".join(summary_parts) if summary_parts else "変更なし"
-    
-    return {
-        "updates": [update.dict() for update in updates],
-        "summary": summary
-    }
 
 
 

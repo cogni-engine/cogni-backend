@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any
 
 from app.infra.supabase.client import get_supabase_client
 from app.infra.supabase.repositories.threads import ThreadRepository
@@ -143,7 +143,7 @@ async def _call_llm_for_decision(
         return EngineDecision(focused_task_id=None, should_start_timer=False)
 
 
-def extract_timer_duration(message: str) -> Optional[Union[int, float]]:
+def extract_timer_duration(message: str) -> Optional[int]:
     """
     Extract timer duration from user message.
     
@@ -151,14 +151,30 @@ def extract_timer_duration(message: str) -> Optional[Union[int, float]]:
         message: User message to extract duration from
         
     Returns:
-        Duration in minutes (int) or seconds (float), or None if no time pattern found
+        Duration in seconds (int), or None if no time pattern found
         
     Examples:
-        "30分集中します" -> 30 (分)
-        "1時間作業する" -> 60 (分)
-        "30秒テスト" -> 30.0 (秒)
-        "30" -> 30 (分として扱う)
+        "30分集中します" -> 1800 (秒)
+        "1時間作業する" -> 3600 (秒)
+        "30秒テスト" -> 30 (秒)
+        "30" -> 1800 (秒、分として扱う)
+        "1:30:45" -> 5445 (秒、時間:分:秒形式)
+        "1:30" -> 5400 (秒、時間:分形式)
     """
+    # 時間:分:秒形式 (例: "1:30:45" = 1時間30分45秒)
+    time_pattern = r'(\d+):(\d+):(\d+)'
+    time_match = re.search(time_pattern, message)
+    if time_match:
+        hours, minutes, seconds = map(int, time_match.groups())
+        return hours * 3600 + minutes * 60 + seconds
+    
+    # 時間:分形式 (例: "1:30" = 1時間30分)
+    hour_min_pattern = r'(\d+):(\d+)'
+    hour_min_match = re.search(hour_min_pattern, message)
+    if hour_min_match:
+        hours, minutes = map(int, hour_min_match.groups())
+        return hours * 3600 + minutes * 60
+    
     # 正規表現で時間を検出: 数字 + (秒|分|時間|sec|min|hour) または 数字のみ
     time_match = re.search(r'(\d+)\s*(秒|分|時間|sec|min|hour)', message, re.IGNORECASE)
     
@@ -166,18 +182,18 @@ def extract_timer_duration(message: str) -> Optional[Union[int, float]]:
         value = int(time_match.group(1))
         unit = time_match.group(2).lower()
         
-        # 単位に応じて返す
+        # 単位に応じて秒単位で返す
         if unit in ['時間', 'hour']:
-            return value * 60  # 分単位
+            return value * 3600  # 秒単位
         elif unit in ['秒', 'sec']:
-            return float(value)  # 秒単位
+            return value  # 秒単位
         else:  # 分|min
-            return value  # 分単位
+            return value * 60  # 秒単位
     
     # 数字のみの場合（分として扱う）
     number_match = re.search(r'^(\d+)$', message.strip())
     if number_match:
-        return int(number_match.group(1))  # 分単位
+        return int(number_match.group(1)) * 60  # 分を秒に変換
     
     return None
 
