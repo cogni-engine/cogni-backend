@@ -187,36 +187,6 @@ async def cogno_chat_stream_endpoint(request: AIChatRequest):
     )
 
 
-@app.get("/api/cogno/timers/poll")
-async def cogno_timer_poll(thread_id: int):
-    """
-    Poll for active timer status.
-    Returns timer info with remaining time or timer_ended flag.
-    """
-    timer_info = await get_active_timer(thread_id)
-    
-    if not timer_info:
-        return {"timer": None, "timer_ended": False}
-    
-    return timer_info
-
-
-@app.post("/api/cogno/timers/start")
-async def cogno_start_timer_endpoint(request: CognoStartTimerRequest):
-    """
-    Start a new timer for a thread.
-    Called when user provides duration (e.g., "30分").
-    """
-    timer_state = await start_timer(
-        request.thread_id,
-        request.duration_seconds,
-        request.message_id
-    )
-    
-    return {
-        "success": True,
-        "timer": timer_state.dict()
-    }
 
 
 @app.get("/api/cogno/messages/{thread_id}")
