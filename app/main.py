@@ -8,9 +8,9 @@ logging.basicConfig(
     force=True
 )
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, APIRouter  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from app.api.base import api_router  # noqa: E402
+from app.api import cogno, notes, tasks, webhooks  # noqa: E402
 
 app = FastAPI(
     title="Cogni Backend API",
@@ -26,6 +26,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Create API router and include all sub-routers
+api_router = APIRouter()
+api_router.include_router(cogno.router)
+api_router.include_router(notes.router)
+api_router.include_router(tasks.router)
+api_router.include_router(webhooks.router)
 
 # Include all API routes
 app.include_router(api_router)
