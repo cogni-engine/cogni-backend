@@ -237,52 +237,6 @@ async def get_cogno_messages(
 
 
 # ============================================
-# Notification Endpoints (Cogno統合)
-# ============================================
-
-@app.post("/api/cogno/notification/trigger")
-async def cogno_notification_trigger(request: NotificationTriggerRequest):
-    """
-    Handle notification click event.
-    Generates AI conversation response and marks notification as resolved.
-    
-    Flow:
-    1. Get notification details
-    2. Generate AI response using conversation_stream
-    3. Mark notification as resolved
-    """
-    try:
-        await handle_notification_click(
-            notification_id=request.notification_id,
-            thread_id=request.thread_id
-        )
-        return {"success": True, "message": "Notification processed"}
-    except Exception as e:
-        logging.error(f"Error in notification trigger: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/cogno/notification/daily-check")
-async def cogno_daily_notification_check(request: DailyCheckRequest):
-    """
-    Daily notification check endpoint.
-    Called at 10:00 AM JST by external scheduler.
-    
-    Flow:
-    1. Check latest message in workspace's latest thread
-    2. If not notification-triggered, summarize pending notifications
-    3. Generate AI message with summary
-    """
-    try:
-        await daily_notification_check(workspace_id=request.workspace_id)
-        return {"success": True, "message": "Daily check completed"}
-    except Exception as e:
-        logging.error(f"Error in daily notification check: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# ============================================
 # Note to Task AI エンドポイント
 # ============================================
 
