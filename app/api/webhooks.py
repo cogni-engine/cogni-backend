@@ -114,3 +114,9 @@ async def handle_tasks_webhook(
     print(f"📝 Task {task_id} added to queue (total: {len(task_notification_queue)})")
     return {"status": "queued", "task_id": task_id}
 
+
+@router.post("/sync-memories")
+async def sync_memories():
+    """Empty endpoint for syncing memories"""
+    print("🔄 CRON : Syncing memories")
+    return {"status": "ok"}
