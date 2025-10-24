@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: cogni-backend
+    env: docker
+    dockerfilePath: ./Dockerfile.prod
+    plan: starter  # Change to 'standard' or 'pro' as needed
+    region: oregon  # Change to your preferred region
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+      - key: PORT
+        value: "8000"
+      # Add your secret environment variables in Render Dashboard:
+      # - SUPABASE_URL
+      # - SUPABASE_KEY
+      # - OPENAI_API_KEY
+      # - WEBHOOK_SECRET
+      # etc.
+
