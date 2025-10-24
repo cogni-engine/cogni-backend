@@ -108,50 +108,6 @@ app.add_middleware(
 def read_root():
     return {"message": "Hello, World!"}
 
-@app.post("/test/stream")
-async def test_stream(request: StreamTestRequest):
-    """Test endpoint to showcase streaming LLM responses with LangGraph"""
-    
-    return StreamingResponse(
-        simple_agent_chat(request.system_message, request.prompt),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
-
-
-@app.post("/api/ai-chat/stream")
-async def ai_chat_stream_endpoint(request: AIChatRequest):
-    """
-    Thread IDベースでAIチャットのストリーミングレスポンスを返すエンドポイント
-    
-    - thread_idから履歴を取得
-    - ユーザーメッセージを保存
-    - AIレスポンスをストリームで返す
-    - 完全なレスポンスをデータベースに保存
-    """
-    return StreamingResponse(
-        ai_chat_stream(request.thread_id, request.message),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
-
-
-@app.get("/api/ai-chat/messages/{thread_id}")
-async def get_ai_messages(thread_id: int):
-    """指定されたThreadのメッセージ一覧を取得"""
-    from app.infra.supabase.repositories.ai_messages import AIMessageRepository
-    
-    ai_message_repo = AIMessageRepository(supabase)
-    messages = await ai_message_repo.find_by_thread(thread_id)
-    
-    return {"messages": messages}
-
 
 # ============================================
 # Cogno Endpoints (新しいアーキテクチャ)
@@ -407,29 +363,6 @@ async def generate_notifications_endpoint(request: GenerateNotificationsRequest)
 # ============================================
 # 通知（Notification）関連エンドポイント
 # ============================================
-
-
-# 特定のタスクから通知を生成
-@app.post("/notifications/generate-from-task")
-async def generate_notifications_from_task_endpoint(request: NotificationCreateRequest):
-    """特定のタスクから通知を生成"""
-    task = next((t for t in mock_tasks if t["id"] == request.task_id), None)
-    if task is None:
-        return {"error": "Task not found"}
-    
-    notifications = await generate_notifications_from_task(task)
-    
-    # 生成された通知をモックデータに追加
-    for notification in notifications:
-        # IDを割り当て
-        notification["id"] = max([n["id"] for n in mock_notifications]) + 1 if mock_notifications else 1
-        mock_notifications.append(notification)
-    
-    return {
-        "notifications": notifications,
-        "count": len(notifications),
-        "message": f"{len(notifications)}件の通知を生成しました"
-    }
 
 
 
