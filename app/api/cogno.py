@@ -16,6 +16,7 @@ class ConversationStreamRequest(BaseModel):
     thread_id: int
     message: str
     notification_id: Optional[int] = None
+    timer_completed: Optional[bool] = None
 
 
 @router.post("/conversations/stream")
@@ -54,6 +55,23 @@ async def stream_conversation(request: ConversationStreamRequest):
         else:
             logging.error(f"Notification {request.notification_id} not found")
             raise HTTPException(status_code=404, detail="Notification not found")
+    
+    # Handle timer completion trigger
+    if request.timer_completed:
+        logging.info(f"Timer completion trigger for thread {request.thread_id}")
+        return StreamingResponse(
+            conversation_stream(
+                thread_id=request.thread_id,
+                user_message=None,
+                timer_completed=True,
+                is_ai_initiated=True
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
     
     # Make engine decision with current user message
     decision = await make_engine_decision(request.thread_id, request.message)
@@ -99,7 +117,6 @@ async def get_thread_messages(
 ):
     """Get messages for a specific thread (optionally since a given message ID)"""
     from app.infra.supabase.repositories.ai_messages import AIMessageRepository
-    from app.services.cogno.timer.timer_manager import get_active_timer
     from app.config import supabase
     
     ai_message_repo = AIMessageRepository(supabase)
@@ -109,18 +126,7 @@ async def get_thread_messages(
     else:
         messages = await ai_message_repo.find_by_thread(thread_id)
     
-    # Check for expired timers if no new messages
-    if not messages:
-        logging.info(f"No new messages for thread {thread_id}, checking for expired timers")
-        timer_info = await get_active_timer(thread_id)
-        
-        # Timer completion detected, refetch messages including completion message
-        if timer_info and timer_info.get("timer_ended"):
-            logging.info(f"Timer completed for thread {thread_id}, refetching messages")
-            if since:
-                messages = await ai_message_repo.find_since(thread_id, since)
-            else:
-                messages = await ai_message_repo.find_by_thread(thread_id)
+    # Timer auto-completion is now handled by the client via stream trigger
     
     # Remove duplicate messages
     seen_ids = set()

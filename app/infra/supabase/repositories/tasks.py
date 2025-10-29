@@ -23,6 +23,11 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
         """Mark a task as completed"""
         update_data = TaskUpdate(completed_at=datetime.now(), status="completed", progress=100)
         return await self.update(task_id, update_data)
+
+    async def mark_pending(self, task_id: int) -> Optional[Task]:
+        """Mark a task as pending (reopen task)"""
+        update_data = TaskUpdate(status="pending", progress=0, completed_at=None)
+        return await self.update(task_id, update_data)
     
     async def find_by_note(self, note_id: int) -> List[Task]:
         """Find tasks created from a specific note"""
@@ -39,4 +44,15 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
         """
         response = self._client.table(self._table_name).delete().eq("source_note_id", note_id).execute()
         return len(response.data) if response.data else 0
+    
+    async def find_updated_since(self, since: datetime) -> List[Task]:
+        """指定時刻以降に更新されたタスクを取得"""
+        query = (
+            self._client.table(self._table_name)
+            .select("*")
+            .gte("updated_at", since.isoformat())
+            .order("updated_at", desc=False)
+        )
+        response = query.execute()
+        return self._to_models(response.data)
 

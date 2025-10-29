@@ -6,7 +6,6 @@ from langchain_openai import ChatOpenAI
 
 from app.config import supabase
 from app.infra.supabase.repositories.notifications import NotificationRepository
-from app.infra.supabase.repositories.tasks import TaskRepository
 from app.models.task import Task
 from app.models.notification import Notification, NotificationCreate, NotificationStatus
 from app.utils.datetime_helper import get_current_datetime_ja
@@ -106,7 +105,6 @@ async def generate_notifications_from_task(task: Task) -> List[Notification]:
 async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Notification]:
     """
     複数のTaskからAIで通知を一括生成してデータベースに保存する
-    既存のスキーマ（NotificationListResponse）を使用
     
     Args:
         tasks: タスクのリスト（同じsource_note_idのタスク群）
@@ -129,22 +127,18 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
     # タスク情報をフォーマット
     tasks_info = []
     for task in tasks:
-        task_info = f"""
-タスクID: {task.id}
+        task_info = f"""タスクID: {task.id}
 タイトル: {task.title}
 説明: {task.description or "説明なし"}
 期限: {task.deadline.isoformat() if task.deadline else "期限なし"}
 ステータス: {task.status or "未設定"}
-進捗: {task.progress if task.progress is not None else 0}%
-"""
-        tasks_info.append(task_info.strip())
+進捗: {task.progress if task.progress is not None else 0}%"""
+        tasks_info.append(task_info)
     
     combined_tasks_info = "\n\n---\n\n".join(tasks_info)
     
-    # 現在の日時を取得（日本時間）
+    # AI呼び出し（1回）
     current_datetime = get_current_datetime_ja()
-    
-    # AI呼び出し（1回のみ）- 既存のNotificationListResponseを使用
     structured_llm_batch = llm.with_structured_output(NotificationListResponse)
     chain = batch_prompt_template | structured_llm_batch
     result: NotificationListResponse = await chain.ainvoke({
@@ -158,11 +152,9 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
         logger.info("No notifications generated for task batch")
         return []
     
-    # 通知を保存（最小のtask_idに紐づける）
-    # 複数タスクをまとめた通知も、最小のtask_idに紐づける
+    # 通知を保存（最初のタスクに紐づける）
     saved_notifications: List[Notification] = []
-    min_task_id = min(task.id for task in tasks)
-    min_task = next(t for t in tasks if t.id == min_task_id)
+    primary_task = tasks[0]  # 最初のタスクを代表とする
     
     for notif in result.notifications:
         suggestions_text = "\n\n【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
@@ -173,59 +165,15 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
                 title=notif.title,
                 content=full_content,
                 due_date=notif.due_date,
-                task_id=min_task_id,  # すべて最小のtask_idに紐づける
-                user_id=min_task.user_id,
+                task_id=primary_task.id,
+                user_id=primary_task.user_id,
                 status=NotificationStatus.SCHEDULED
             )
             saved_notification = await notification_repo.create(notification_create)
             saved_notifications.append(saved_notification)
-            logger.info(f"Notification saved: {saved_notification.id} (linked to task {min_task_id})")
+            logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id})")
         except Exception as e:
             logger.error(f"Failed to save notification: {e}")
             continue
     
     return saved_notifications
-
-
-async def process_task_queue_for_notifications(queue_data: dict[int, int]) -> None:
-    """
-    キューに溜まったタスクをsource_note_id単位でグループ化してバッチ処理
-    
-    Args:
-        queue_data: {task_id: source_note_id} の辞書
-    """
-    if not queue_data:
-        return
-    
-    print(f"🔄 Processing {len(queue_data)} tasks from queue")
-    
-    # source_note_idでグループ化
-    groups: dict[int, list[int]] = {}
-    for task_id, source_note_id in queue_data.items():
-        if source_note_id not in groups:
-            groups[source_note_id] = []
-        groups[source_note_id].append(task_id)
-    
-    print(f"📊 Grouped into {len(groups)} note groups")
-    
-    # 各グループを処理
-    task_repo = TaskRepository(supabase)
-    
-    for source_note_id, task_ids in groups.items():
-        try:
-            # タスクを取得
-            tasks = []
-            for task_id in task_ids:
-                task = await task_repo.find_by_id(task_id)
-                if task:
-                    tasks.append(task)
-            
-            if not tasks:
-                print(f"⚠️ No valid tasks found for source_note_id {source_note_id}")
-                continue
-            
-            # バッチで通知生成
-            notifications = await generate_notifications_from_tasks_batch(tasks)
-            print(f"✅ Generated {len(notifications)} notifications for {len(tasks)} tasks (note {source_note_id})")
-        except Exception as e:
-            print(f"❌ Error processing task group {source_note_id}: {e}")

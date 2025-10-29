@@ -22,7 +22,7 @@ class TaskBaseForAI(BaseModel):
                     "情報を省略・要約してはいけない。"
     )
     deadline: Optional[datetime] = Field(None, description="期限（ISO形式: 2024-10-15T00:00:00）")
-    status: Optional[str] = Field("pending", description="ステータス（pending, in_progress, completedのいずれか）")
+    status: Optional[str] = Field("pending", description="ステータス（pending または completed のいずれか）")
     progress: Optional[int] = Field(None, ge=0, le=100, description="進捗率（0-100）")
     source_note_id: int = Field(description="元となったNoteのID（必須）")
 

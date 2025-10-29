@@ -1,122 +1,106 @@
-from fastapi import APIRouter, Request, Header, HTTPException
-from app.config import supabase, WEBHOOK_SECRET
+from fastapi import APIRouter
+from app.config import supabase
 from app.services.note_to_task import generate_tasks_from_note
-from app.services.task_to_notification import process_task_queue_for_notifications
+from app.services.task_to_notification import generate_notifications_from_tasks_batch
 from app.infra.supabase.repositories.workspaces import WorkspaceRepository
 import asyncio
-import json
-from typing import Dict, Optional
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
-
-# Task notification queue
-task_notification_queue: Dict[int, int] = {}
-queue_lock = asyncio.Lock()
-processing_task: Optional[asyncio.Task] = None
-DEBOUNCE_SECONDS = 10
-
-
-async def process_task_notification_queue():
-    """Wait 10 seconds, then process the queue"""
-    global task_notification_queue
-    
-    await asyncio.sleep(DEBOUNCE_SECONDS)
-    
-    async with queue_lock:
-        if not task_notification_queue:
-            return
-        queue_copy = task_notification_queue.copy()
-        task_notification_queue.clear()
-    
-    await process_task_queue_for_notifications(queue_copy)
-
-
-@router.post("/notes")
-async def handle_notes_webhook(
-    request: Request,
-    x_webhook_secret: str = Header(None)
-):
-    """Handle Supabase webhook for note changes (personal workspaces only)"""
-    
-    if x_webhook_secret != WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized webhook call")
-    
-    body = await request.json()
-    print("✅ Webhook received:", json.dumps(body, indent=2))
-    
-    record = body.get("record") or {}
-    note_id = record.get("id")
-    note_text = record.get("text", "")
-    workspace_id = record.get("workspace_id")
-
-    if not note_id:
-        raise HTTPException(status_code=400, detail="Missing note_id in payload")
-    
-    if not workspace_id:
-        raise HTTPException(status_code=400, detail="Missing workspace_id in payload")
-    
-    workspace_repo = WorkspaceRepository(supabase)
-    workspace = await workspace_repo.find_by_id(workspace_id)
-    
-    if not workspace:
-        print(f"❌ Workspace {workspace_id} not found")
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
-    if workspace.type != "personal":
-        print(f"🚫 Skipped webhook for workspace_id={workspace_id}, type={workspace.type}")
-        return {"status": "ignored", "reason": "Not personal workspace"}
-    
-    if not note_text:
-        print(f"⚠️ Note {note_id} has no text, skipping task generation")
-        return {"status": "skipped", "reason": "empty_note"}
-    
-    # TODO: Get user_id from workspace_id
-    user_id = "58e744e7-ec0f-45e1-a63a-bc6ed71e10de"
-    
-    try:
-        tasks = await generate_tasks_from_note(note_id, note_text, user_id)
-        print(f"🧠 Generated {len(tasks)} tasks from note {note_id}")
-        return {"status": "ok", "generated_count": len(tasks)}
-    except Exception as e:
-        print(f"❌ Error generating tasks: {e}")
-        raise HTTPException(status_code=500, detail=f"Task generation failed: {str(e)}")
-
-
-@router.post("/tasks")
-async def handle_tasks_webhook(
-    request: Request,
-    x_webhook_secret: str = Header(None)
-):
-    """Handle Supabase webhook for task changes"""
-    global processing_task
-    
-    if x_webhook_secret != WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized webhook call")
-    
-    body = await request.json()
-    record = body.get("record") or {}
-    
-    task_id = record.get("id")
-    source_note_id = record.get("source_note_id")
-    
-    if not task_id or not source_note_id:
-        print(f"⚠️ Invalid webhook payload: task_id={task_id}, source_note_id={source_note_id}")
-        return {"status": "ignored", "reason": "missing_required_fields"}
-    
-    async with queue_lock:
-        task_notification_queue[task_id] = source_note_id
-        
-        if processing_task and not processing_task.done():
-            processing_task.cancel()
-        
-        processing_task = asyncio.create_task(process_task_notification_queue())
-    
-    print(f"📝 Task {task_id} added to queue (total: {len(task_notification_queue)})")
-    return {"status": "queued", "task_id": task_id}
 
 
 @router.post("/sync-memories")
 async def sync_memories():
-    """Empty endpoint for syncing memories"""
-    print("🔄 CRON : Syncing memories")
-    return {"status": "ok"}
+    """
+    1分ごとのCRON実行用エンドポイント
+    - 1分前から現在までに更新されたノートのみを処理
+    - ノート→タスク生成→通知生成（一連の流れを完結）
+    """
+    from datetime import datetime, timedelta, timezone
+    from app.infra.supabase.repositories.notes import NoteRepository
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info("🔄 CRON: Starting sync-memories")
+    
+    # 1分前からのデータを取得
+    one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    
+    note_repo = NoteRepository(supabase)
+    
+    # 更新されたノートのみ取得（タスクは追跡しない）
+    updated_notes = await note_repo.find_updated_since(one_minute_ago)
+    
+    logger.info(f"Found {len(updated_notes)} updated notes")
+    
+    # セマフォで並列実行数を制限（10並列）
+    semaphore = asyncio.Semaphore(10)
+    
+    # 統計情報
+    total_tasks_generated = 0
+    total_notifications_generated = 0
+    
+    # ノート処理関数
+    async def process_note_with_limit(note):
+        nonlocal total_tasks_generated, total_notifications_generated
+        
+        async with semaphore:
+            try:
+                # personal workspaceのみ処理
+                workspace_repo = WorkspaceRepository(supabase)
+                workspace = await workspace_repo.find_by_id(note.workspace_id)
+                
+                if not workspace or workspace.type != "personal":
+                    return {"status": "skipped", "note_id": note.id, "reason": "not_personal_workspace"}
+                
+                if not note.text:
+                    return {"status": "skipped", "note_id": note.id, "reason": "empty_text"}
+                
+                # TODO: workspace_idからuser_idを取得
+                user_id = "58e744e7-ec0f-45e1-a63a-bc6ed71e10de"
+                
+                # ノート→タスク生成（既存関数は冪等）
+                tasks = await generate_tasks_from_note(note.id, note.text, user_id)
+                tasks_count = len(tasks)
+                total_tasks_generated += tasks_count
+                
+                # タスクが生成されたら、即座に通知を生成
+                notifications_count = 0
+                if tasks:
+                    notifications = await generate_notifications_from_tasks_batch(tasks)
+                    notifications_count = len(notifications)
+                    total_notifications_generated += notifications_count
+                    
+                    logger.info(f"✅ Note {note.id}: Generated {tasks_count} tasks and {notifications_count} notifications")
+                else:
+                    logger.info(f"✅ Note {note.id}: No tasks generated")
+                
+                return {
+                    "status": "ok",
+                    "note_id": note.id,
+                    "tasks_count": tasks_count,
+                    "notifications_count": notifications_count
+                }
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing note {note.id}: {e}")
+                return {"status": "error", "note_id": note.id, "error": str(e)}
+    
+    # ノートを並列処理
+    results = await asyncio.gather(
+        *[process_note_with_limit(note) for note in updated_notes],
+        return_exceptions=True
+    )
+    
+    # 結果集計
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
+    
+    logger.info(f"🎉 CRON completed: {success}/{len(updated_notes)} notes processed")
+    logger.info(f"📊 Generated {total_tasks_generated} tasks and ~{total_notifications_generated} notifications")
+    
+    return {
+        "status": "ok",
+        "notes_processed": success,
+        "notes_total": len(updated_notes),
+        "tasks_generated": total_tasks_generated,
+        "notifications_generated": total_notifications_generated
+    }

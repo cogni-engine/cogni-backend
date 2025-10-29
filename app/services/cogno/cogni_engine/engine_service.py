@@ -14,6 +14,7 @@ from app.models.ai_message import AIMessage
 from app.services.llm.call_llm import LLMService
 from .models.engine_decision import EngineDecision
 from .prompts.engine_prompt import ENGINE_SYSTEM_PROMPT
+from app.utils.datetime_helper import get_current_datetime_ja
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,6 @@ async def _call_llm_for_decision(
     task_list: List[Dict[str, Any]]
 ) -> EngineDecision:
     """Call LLM to make engine decision (focus + timer)"""
-    from app.utils.datetime_helper import get_current_datetime_ja
 
     current_datetime = get_current_datetime_ja()
     messages = [

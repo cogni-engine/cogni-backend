@@ -1,2 +1,0 @@
-"""Timer management service"""
-
