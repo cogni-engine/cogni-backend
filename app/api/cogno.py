@@ -100,7 +100,7 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
     
     # Make engine decision with current user message (also returns pending tasks)
     decision, pending_tasks = await make_engine_decision(request.thread_id, request.message)
-    logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}, task_to_complete_id={decision.task_to_complete_id}, pending_tasks_count={len(pending_tasks)}")
+    logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}, task_to_complete_id={decision.task_to_complete_id}, next_task_id={getattr(decision, 'next_task_id', None)}, pending_tasks_count={len(pending_tasks)}")
     
     # If engine decided to start timer, extract duration
     timer_duration = None
@@ -143,6 +143,7 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
             thread_id=request.thread_id,
             user_message=request.message,
             focused_task_id=decision.focused_task_id,
+            next_task_id=getattr(decision, 'next_task_id', None),
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,

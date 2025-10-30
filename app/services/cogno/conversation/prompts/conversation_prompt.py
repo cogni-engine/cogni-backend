@@ -9,6 +9,17 @@ from app.utils.datetime_helper import get_current_datetime_ja, format_datetime_j
 CONVERSATION_BASE_PROMPT = """あなたはCognoという名前の、親切で知的なAIアシスタントです。"""
 
 
+NEXT_TASK_ADDITION = """
+
+【次に取り組むタスク】
+現在のタスクが完全に終わったら、次は『{next_task_title}』に進んでください。
+締切: {next_task_deadline}
+
+【重要】
+- 現在のタスクが完全に終わってから触れるべき内容です
+- まずは現在のタスクを計画立てて実行することに集中し、完了後に自然に次のタスクへ誘導してください
+"""
+
 TIMER_REQUEST_ADDITION = """
 
 【タイマー設定について】
@@ -138,6 +149,7 @@ TASK_COMPLETION_CONFIRMATION_ADDITION = """
 
 def build_conversation_prompt(
     focused_task: Optional[Task] = None,
+    next_task: Optional[Task] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
     timer_duration: Optional[int] = None,  # 秒単位に統一
@@ -229,6 +241,14 @@ def build_conversation_prompt(
         )
         
         base_prompt += task_context
+
+        # Add next task context if provided
+        if next_task:
+            next_deadline_str = format_datetime_ja(next_task.deadline) if next_task.deadline else "未設定"
+            base_prompt += NEXT_TASK_ADDITION.format(
+                next_task_title=next_task.title,
+                next_task_deadline=next_deadline_str,
+            )
     
     # Add timer request if needed
     if should_ask_timer:

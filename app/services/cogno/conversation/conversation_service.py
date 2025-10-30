@@ -20,6 +20,7 @@ async def conversation_stream(
     thread_id: int,
     user_message: Optional[str] = None,
     focused_task_id: Optional[int] = None,
+    next_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
     timer_duration: Optional[int] = None,  # 秒単位に統一
@@ -78,6 +79,15 @@ async def conversation_stream(
                 logger.info(f"Focused task: {focused_task_id} (not found)")
         else:
             logger.info("No focused task")
+
+        # Get next task details if provided
+        next_task = None
+        if next_task_id:
+            next_task = await task_repo.find_by_id(next_task_id)
+            if next_task:
+                logger.info(f"Next task: {next_task_id} - {next_task.title}")
+            else:
+                logger.info(f"Next task: {next_task_id} (not found)")
         
         # Get message history
         message_history = await ai_message_repo.find_by_thread(thread_id)
@@ -95,6 +105,7 @@ async def conversation_stream(
         # Build system prompt with task context and timer request if needed
         system_content = build_conversation_prompt(
             focused_task=focused_task,
+            next_task=next_task,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,
