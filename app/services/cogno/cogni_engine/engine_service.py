@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 from app.infra.supabase.client import get_supabase_client
@@ -19,18 +20,19 @@ from app.utils.datetime_helper import get_current_datetime_ja
 logger = logging.getLogger(__name__)
 
 
-async def make_engine_decision(thread_id: int, current_user_message: str) -> EngineDecision:
+async def make_engine_decision(thread_id: int, current_user_message: str) -> tuple[EngineDecision, List[Task]]:
     """
     Analyze chat history and tasks to make decisions:
     1. Which task to focus on
     2. Whether to start a timer
+    3. Which task to complete
     
     Args:
         thread_id: Thread ID to analyze
         current_user_message: Current user message to include in analysis
         
     Returns:
-        EngineDecision with focused_task_id and should_start_timer
+        Tuple of (EngineDecision, pending_tasks_list)
     """
     supabase_client = get_supabase_client()
     
@@ -45,24 +47,37 @@ async def make_engine_decision(thread_id: int, current_user_message: str) -> Eng
         thread = await thread_repo.find_by_id(thread_id)
         if not thread or not thread.workspace_id:
             logger.warning(f"Thread {thread_id} not found or has no workspace_id")
-            return EngineDecision(focused_task_id=None, should_start_timer=False)
+            return EngineDecision(focused_task_id=None, should_start_timer=False), []
         
         # Get user from workspace members
         workspace_members = await workspace_member_repo.find_by_workspace(thread.workspace_id)
         if not workspace_members:
             logger.warning(f"No workspace members found for workspace {thread.workspace_id}")
-            return EngineDecision(focused_task_id=None, should_start_timer=False)
+            return EngineDecision(focused_task_id=None, should_start_timer=False), []
         user_id = workspace_members[0].user_id
         logger.info(f"Found user_id: {user_id} for thread {thread_id}")
         
-        # Get user's tasks
-        tasks = await task_repo.find_by_user(user_id)
+        # Get user's tasks (exclude completed, but include recently completed within 2 days)
+        all_tasks = await task_repo.find_by_user(user_id)
+        two_days_ago = datetime.now(timezone.utc) - timedelta(days=2)
+        tasks = []
+        for t in all_tasks:
+            if t.status != "completed":
+                tasks.append(t)
+            elif t.completed_at:
+                # Handle both timezone-aware and naive datetimes
+                completed_at = t.completed_at
+                if completed_at.tzinfo is None:
+                    # If naive, assume UTC
+                    completed_at = completed_at.replace(tzinfo=timezone.utc)
+                if completed_at >= two_days_ago:
+                    tasks.append(t)
         if not tasks:
-            # No tasks, but still check for timer
+            # No pending tasks, but still check for timer
             tasks = []
-            logger.info(f"No tasks found for user {user_id}")
+            logger.info(f"No pending tasks found for user {user_id} (total: {len(all_tasks)})")
         else:
-            logger.info(f"Found {len(tasks)} tasks for user {user_id}")
+            logger.info(f"Found {len(tasks)} pending tasks for user {user_id} (excluded {len(all_tasks) - len(tasks)} completed)")
         
         # Get recent chat history (last 6 messages for better context)
         recent_messages = await ai_message_repo.get_recent_messages(thread_id, limit=6)
@@ -79,11 +94,11 @@ async def make_engine_decision(thread_id: int, current_user_message: str) -> Eng
         # Make decision via LLM
         decision = await _call_llm_for_decision(chat_history, task_list)
         
-        return decision
+        return decision, tasks
         
     except Exception as e:
         logger.error(f"Error making engine decision: {e}")
-        return EngineDecision(focused_task_id=None, should_start_timer=False)
+        return EngineDecision(focused_task_id=None, should_start_timer=False), []
 
 
 def _convert_messages_to_dict(messages: List[AIMessage]) -> List[Dict[str, str]]:
@@ -112,6 +127,20 @@ def _convert_tasks_to_dict(tasks: List[Task]) -> List[Dict[str, Any]]:
     # Sort by source_note_id and id
     task_list.sort(key=lambda x: (x["source_note_id"] or 0, x["id"]))
     return task_list
+
+
+def _convert_tasks_to_simple_dict(tasks: List[Task]) -> List[Dict[str, Any]]:
+    """Convert Task objects to simple dict (without description) for conversation"""
+    return [
+        {
+            "id": task.id,
+            "title": task.title,
+            "deadline": task.deadline.isoformat() if task.deadline else None,
+            "status": task.status,
+            "created_at": task.created_at.isoformat(),
+        }
+        for task in tasks
+    ]
 
 
 async def _call_llm_for_decision(

@@ -28,6 +28,9 @@ async def conversation_stream(
     notification_context: Optional[Notification] = None,
     daily_summary_context: Optional[str] = None,
     is_ai_initiated: bool = False,  # AI起点メッセージフラグ（見た目用）
+    task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
+    task_to_complete_id: Optional[int] = None,  # 完了候補タスクID
+    task_completion_confirmed: bool = False,  # 完了確定フラグ
 ) -> AsyncGenerator[str, None]:
     """
     Stream conversation AI response.
@@ -44,6 +47,9 @@ async def conversation_stream(
         notification_context: Notification object for single notification click
         daily_summary_context: Daily summary text for multiple notifications
         is_ai_initiated: Whether this message is initiated by AI (for styling purposes)
+        task_list_for_suggestion: Task list for suggestion when no focused task
+        task_to_complete_id: Task ID to potentially complete
+        task_completion_confirmed: Whether task completion is confirmed (2nd time)
         
     Yields:
         SSE-formatted stream chunks
@@ -79,6 +85,13 @@ async def conversation_stream(
         # Convert to LLM format
         messages = _convert_to_llm_format(message_history)
         
+        # Get task for completion confirmation if needed
+        task_to_complete = None
+        if task_to_complete_id and not task_completion_confirmed:
+            task_to_complete = await task_repo.find_by_id(task_to_complete_id)
+            if task_to_complete:
+                logger.info(f"Task to complete (confirmation): {task_to_complete_id} - {task_to_complete.title}")
+        
         # Build system prompt with task context and timer request if needed
         system_content = build_conversation_prompt(
             focused_task=focused_task,
@@ -88,7 +101,10 @@ async def conversation_stream(
             timer_completed=timer_completed,
             notification_triggered=notification_triggered,
             notification_context=notification_context,
-            daily_summary_context=daily_summary_context
+            daily_summary_context=daily_summary_context,
+            task_list_for_suggestion=task_list_for_suggestion,
+            task_to_complete=task_to_complete,
+            task_completion_confirmed=task_completion_confirmed
         )
         messages.append({"role": "system", "content": system_content})
         
@@ -154,6 +170,10 @@ async def conversation_stream(
             if meta:
                 final_meta.update(meta)
             final_meta["is_ai_initiated"] = is_ai_initiated
+            
+            # Save task_to_complete_id to meta for tracking
+            if task_to_complete_id:
+                final_meta["task_to_complete_id"] = task_to_complete_id
             
             assistant_msg_create = AIMessageCreate(
                 content=full_response,

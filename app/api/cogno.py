@@ -1,15 +1,39 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 import logging
 
 from app.infra.supabase.repositories.notifications import NotificationRepository
+from app.infra.supabase.repositories.tasks import TaskRepository
+from app.infra.supabase.repositories.ai_messages import AIMessageRepository
 from app.infra.supabase.client import get_supabase_client
-from app.services.cogno.cogni_engine.engine_service import make_engine_decision, extract_timer_duration
+from app.services.cogno.cogni_engine.engine_service import make_engine_decision, extract_timer_duration, _convert_tasks_to_simple_dict
 from app.services.cogno.conversation.conversation_service import conversation_stream
+from app.models.ai_message import MessageRole
 
 router = APIRouter(prefix="/api/cogno", tags=["cogno"])
+
+
+async def get_previous_task_to_complete(thread_id: int) -> Optional[int]:
+    """Get previous task_to_complete_id from last assistant message"""
+    supabase_client = get_supabase_client()
+    ai_message_repo = AIMessageRepository(supabase_client)
+    recent = await ai_message_repo.get_recent_messages(thread_id, limit=1)
+    if recent and recent[0].role == MessageRole.ASSISTANT and recent[0].meta:
+        return recent[0].meta.get("task_to_complete_id")
+    return None
+
+
+async def complete_task_background(task_id: int):
+    """Background task to mark task as completed"""
+    try:
+        supabase_client = get_supabase_client()
+        task_repo = TaskRepository(supabase_client)
+        await task_repo.mark_completed(task_id)
+        logging.info(f"✓ Task {task_id} marked as completed (background)")
+    except Exception as e:
+        logging.error(f"Error completing task {task_id} in background: {e}")
 
 
 class ConversationStreamRequest(BaseModel):
@@ -20,15 +44,16 @@ class ConversationStreamRequest(BaseModel):
 
 
 @router.post("/conversations/stream")
-async def stream_conversation(request: ConversationStreamRequest):
+async def stream_conversation(request: ConversationStreamRequest, background_tasks: BackgroundTasks):
     """
     Stream a conversation with Cogno AI.
     
     Flow:
     1. If notification_id provided: Skip engine decision, generate notification response
-    2. Otherwise: Engine makes decision (focused_task_id, should_start_timer)
+    2. Otherwise: Engine makes decision (focused_task_id, should_start_timer, task_to_complete_id)
     3. If should_start_timer=true, extract timer duration
-    4. Conversation AI responds with timer info in meta
+    4. If task_to_complete_id: Check if 2nd consecutive -> complete task in background
+    5. Conversation AI responds with timer info in meta
     """
     # Handle notification trigger
     if request.notification_id:
@@ -73,9 +98,9 @@ async def stream_conversation(request: ConversationStreamRequest):
             }
         )
     
-    # Make engine decision with current user message
-    decision = await make_engine_decision(request.thread_id, request.message)
-    logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
+    # Make engine decision with current user message (also returns pending tasks)
+    decision, pending_tasks = await make_engine_decision(request.thread_id, request.message)
+    logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}, task_to_complete_id={decision.task_to_complete_id}, pending_tasks_count={len(pending_tasks)}")
     
     # If engine decided to start timer, extract duration
     timer_duration = None
@@ -91,6 +116,26 @@ async def stream_conversation(request: ConversationStreamRequest):
     should_ask_timer = decision.should_start_timer and not timer_started
     logging.info(f"Conversation context: should_ask_timer={should_ask_timer}, timer_started={timer_started}, timer_duration={timer_duration}")
     
+    # Check for task completion (2-stage confirmation)
+    task_completion_confirmed = False
+    if decision.task_to_complete_id:
+        previous_task_to_complete = await get_previous_task_to_complete(request.thread_id)
+        if previous_task_to_complete == decision.task_to_complete_id:
+            # 2nd consecutive time -> confirm and complete
+            task_completion_confirmed = True
+            background_tasks.add_task(complete_task_background, decision.task_to_complete_id)
+            logging.info(f"✓ Task {decision.task_to_complete_id} completion confirmed (2nd time), will complete in background")
+        else:
+            # 1st time -> ask for confirmation
+            logging.info(f"Task {decision.task_to_complete_id} completion suggested (1st time), asking for confirmation")
+    
+    # Prepare task list for suggestion if no focused task
+    task_list_for_suggestion = None
+    if not decision.focused_task_id and pending_tasks:
+        # Reuse pending tasks already fetched by engine
+        task_list_for_suggestion = _convert_tasks_to_simple_dict(pending_tasks)
+        logging.info(f"Providing {len(task_list_for_suggestion)} tasks for suggestion")
+    
     # Stream conversation response with engine decision context
     # Timer info will be saved in AI message meta, not as separate system message
     return StreamingResponse(
@@ -100,7 +145,10 @@ async def stream_conversation(request: ConversationStreamRequest):
             focused_task_id=decision.focused_task_id,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
-            timer_duration=timer_duration
+            timer_duration=timer_duration,
+            task_list_for_suggestion=task_list_for_suggestion,
+            task_to_complete_id=decision.task_to_complete_id,
+            task_completion_confirmed=task_completion_confirmed
         ),
         media_type="text/event-stream",
         headers={

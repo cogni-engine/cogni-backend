@@ -22,4 +22,14 @@ class EngineDecision(BaseModel):
             "False for simple questions or ongoing conversations."
         )
     )
+    task_to_complete_id: Optional[int] = Field(
+        None,
+        description=(
+            "ID of the task to mark as completed. "
+            "Set ONLY when user explicitly indicates task completion with phrases like "
+            "'終わった' (finished), '完了した' (completed), 'できた' (done). "
+            "Do NOT set for mere progress reports or casual 'やった' (did it). "
+            "Be strict in judgment."
+        )
+    )
 

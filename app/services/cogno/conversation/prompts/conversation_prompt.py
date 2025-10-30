@@ -1,5 +1,6 @@
 """System prompt for conversation AI"""
-from typing import Optional
+from typing import Optional, List, Dict
+import json
 from app.models.task import Task
 from app.models.notification import Notification
 from app.utils.datetime_helper import get_current_datetime_ja, format_datetime_ja
@@ -75,7 +76,63 @@ NOTIFICATION_TRIGGERED_ADDITION = """
 - 「進捗はいかがですか？困っていることがあれば教えてください。」
 
 【ゴール】
-出力はダイレクトで短く、“通知”としてすぐ理解・行動できる形にしてください。出力は5行に収まる程度にしてください。
+出力はダイレクトで短く、"通知"としてすぐ理解・行動できる形にしてください。出力は5行に収まる程度にしてください。
+"""
+
+
+SUGGEST_IMPORTANT_TASKS_ADDITION = """
+
+【重要なことの提案】
+現在フォーカス中のタスクはありませんが、以下のタスクがあります：
+
+{task_list_str}
+
+現在時刻: {current_time}
+
+あなたの役割：
+- 期限が近いもの、重要度が高そうなものを2-3個ピックアップ
+- 「タスク」という言葉は避け、自然な会話で提案
+- 過ぎているものも含め、期限を適宜伝えながら緊急性を伝える
+- ユーザーのモチベーションを上げる言い回しで
+- 具体的な行動を促す
+- どれくらい進んでいるか、終わらせたかの確認をする
+
+例：
+- 「今日中に○○を片付けておくと安心ですね」
+- 「△△の期限が迫っているので、今取り組みませんか？」
+- 「□□から始めるのはどうでしょう？」
+
+【注意】
+- 「タスク」という単語は極力使わない
+- やること、予定、といった自然な言葉で表現
+- 押し付けがましくなく、前向きに
+"""
+
+
+TASK_COMPLETION_CONFIRMATION_ADDITION = """
+
+【タスク完了の最終確認】
+ユーザーがタスク「{task_title}」の完了を示唆しました。
+
+あなたの役割：
+- タスクの全体が本当に完了しているか詳細に確認
+- 以下を必ず聞く：
+  * やるべきことは全て終わったか
+  * 確認漏れはないか
+  * 残っている作業はないか(タスクの詳細をもとに、漏れがありそうなものなど隅々まで提示して確認する)
+
+タスク情報：
+- タイトル: {task_title}
+- 説明: {task_description}
+- 期限: {task_deadline}
+
+【確認方法】
+具体的に「○○は終わりましたか？」「△△の確認はできていますか？」と聞いてください。
+完了を急がせず、丁寧に確認すること。
+タスクの説明に書かれている内容を元に、本当に全部終わったか(あるいはきちんと理解しているか）確認してください。
+
+【注意】
+- 疑わしい場合は必ず確認
 """
 
 
@@ -87,7 +144,10 @@ def build_conversation_prompt(
     timer_completed: bool = False,
     notification_triggered: bool = False,
     notification_context: Optional[Notification] = None,
-    daily_summary_context: Optional[str] = None
+    daily_summary_context: Optional[str] = None,
+    task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
+    task_to_complete: Optional[Task] = None,  # 完了確認対象タスク
+    task_completion_confirmed: bool = False  # 完了確定フラグ
 ) -> str:
     """
     Build conversation AI system prompt.
@@ -216,6 +276,25 @@ def build_conversation_prompt(
             daily_context = f"\n\n【本日の重要事項】\n{daily_summary_context}\n"
             daily_context += "\nこれらの事項について、ユーザーと会話しながら対応を進めてください。"
             base_prompt += daily_context
+    
+    # Add task suggestion prompt if no focused task but tasks exist
+    if task_list_for_suggestion and not focused_task:
+        current_time = get_current_datetime_ja()
+        task_list_str = json.dumps(task_list_for_suggestion, ensure_ascii=False, indent=2)
+        base_prompt += SUGGEST_IMPORTANT_TASKS_ADDITION.format(
+            task_list_str=task_list_str,
+            current_time=current_time
+        )
+    
+    # Add task completion confirmation prompt if needed
+    if task_to_complete and not task_completion_confirmed:
+        task_deadline_str = format_datetime_ja(task_to_complete.deadline) if task_to_complete.deadline else "未設定"
+        task_description_str = task_to_complete.description or "説明なし"
+        base_prompt += TASK_COMPLETION_CONFIRMATION_ADDITION.format(
+            task_title=task_to_complete.title,
+            task_description=task_description_str,
+            task_deadline=task_deadline_str
+        )
     
     return base_prompt
 
