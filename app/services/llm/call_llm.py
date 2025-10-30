@@ -57,8 +57,6 @@ class LLMService:
         async for chunk in self.llm.astream(lc_messages):
             if chunk.content:
                 yield f"data: {chunk.content}\n\n"
-        # Send end signal
-        yield "data: [DONE]\n\n"
 
 
     async def structured_invoke(self, messages: List[Dict[str, str]], schema: Type[T], **kwargs) -> T:

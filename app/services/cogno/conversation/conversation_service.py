@@ -1,5 +1,6 @@
 """Conversation Service - User-facing AI chat with streaming"""
 import logging
+import json
 from typing import AsyncGenerator, List, Dict, Optional
 
 from app.models.ai_message import AIMessage, AIMessageCreate, MessageRole
@@ -127,10 +128,10 @@ async def conversation_stream(
         full_response = ""
         
         async for chunk in llm_service.stream_invoke(messages):
-            if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-                content = chunk[6:-2]  # Remove "data: " prefix and "\n\n" suffix
-                full_response += content
-            yield chunk
+            content = chunk.removeprefix("data: ").removesuffix("\n\n")
+            wrapped_chunk = json.dumps({"data": content}, ensure_ascii=False)
+            yield f"data: {wrapped_chunk}\n\n"
+            full_response += content
         
         # Save assistant response
         if full_response:
