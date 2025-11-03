@@ -60,12 +60,12 @@ async def sync_memories():
                 
                 if workspace.type == "personal":
                     # personal workspaceの場合: オーナーのuser_idを取得
-                workspace_member_repo = WorkspaceMemberRepository(supabase)
-                members = await workspace_member_repo.find_by_workspace(note.workspace_id)
-                
-                if not members:
-                    return {"status": "error", "note_id": note.id, "reason": "no_workspace_members"}
-                
+                    workspace_member_repo = WorkspaceMemberRepository(supabase)
+                    members = await workspace_member_repo.find_by_workspace(note.workspace_id)
+                    
+                    if not members:
+                        return {"status": "error", "note_id": note.id, "reason": "no_workspace_members"}
+                    
                     user_ids = [members[0].user_id]
                     
                 elif workspace.type == "group":

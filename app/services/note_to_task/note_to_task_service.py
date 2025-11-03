@@ -67,13 +67,13 @@ async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[
                 source_note_id=note_id,
                 **task.model_dump(exclude={'source_note_id'})
             )
-        try:
-            saved_task = await task_repo.create(task_create)
-            saved_tasks.append(saved_task)
+            try:
+                saved_task = await task_repo.create(task_create)
+                saved_tasks.append(saved_task)
                 logger.info(f"Task saved successfully: {saved_task.id} - {saved_task.title} (user: {user_id})")
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"Failed to save task: {task_create.title} for user {user_id}. Error: {e}")
-            # 失敗したタスクはスキップして続行
-            continue
+                # 失敗したタスクはスキップして続行
+                continue
     
     return saved_tasks
