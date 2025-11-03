@@ -11,8 +11,8 @@ router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 @router.post("/sync-memories")
 async def sync_memories():
     """
-    1分ごとのCRON実行用エンドポイント
-    - 1分前から現在までに更新されたノートのみを処理
+    5分ごとのCRON実行用エンドポイント
+    - 5分前から現在までに更新されたノートのみを処理
     - ノート→タスク生成→通知生成（一連の流れを完結）
     """
     from datetime import datetime, timedelta, timezone
@@ -22,13 +22,13 @@ async def sync_memories():
     logger = logging.getLogger(__name__)
     logger.info("🔄 CRON: Starting sync-memories")
     
-    # 1分前からのデータを取得
-    one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    # 5分前からのデータを取得
+    five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
     
     note_repo = NoteRepository(supabase)
     
     # 更新されたノートのみ取得（タスクは追跡しない）
-    updated_notes = await note_repo.find_updated_since(one_minute_ago)
+    updated_notes = await note_repo.find_updated_since(five_minutes_ago)
     
     logger.info(f"Found {len(updated_notes)} updated notes")
     
