@@ -29,7 +29,7 @@ async def generate_tasks_for_note(note_id: int, request: GenerateTasksRequest):
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     
-    tasks = await generate_tasks_from_note(note_id, note.text, request.user_id)
+    tasks = await generate_tasks_from_note(note_id, note.text, [request.user_id])
     
     return {
         "tasks": tasks,

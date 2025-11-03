@@ -45,28 +45,38 @@ async def sync_memories():
         
         async with semaphore:
             try:
-                # personal workspaceのみ処理
+                # ワークスペース情報を取得
                 workspace_repo = WorkspaceRepository(supabase)
                 workspace = await workspace_repo.find_by_id(note.workspace_id)
                 
-                if not workspace or workspace.type != "personal":
-                    return {"status": "skipped", "note_id": note.id, "reason": "not_personal_workspace"}
+                if not workspace:
+                    return {"status": "error", "note_id": note.id, "reason": "workspace_not_found"}
                 
                 if not note.text:
                     return {"status": "skipped", "note_id": note.id, "reason": "empty_text"}
                 
-                # workspace_idからuser_idを取得（personal workspaceのオーナー）
+                # workspace typeに応じてuser_idsを取得
+                user_ids = []
+                
+                if workspace.type == "personal":
+                    # personal workspaceの場合: オーナーのuser_idを取得
                 workspace_member_repo = WorkspaceMemberRepository(supabase)
                 members = await workspace_member_repo.find_by_workspace(note.workspace_id)
                 
                 if not members:
                     return {"status": "error", "note_id": note.id, "reason": "no_workspace_members"}
                 
-                # personal workspaceなので、最初のメンバー（通常はowner）のuser_idを使用
-                user_id = members[0].user_id
+                    user_ids = [members[0].user_id]
+                    
+                elif workspace.type == "group":
+                    # group workspaceの場合: assigneeのuser_idsを取得
+                    user_ids = await note_repo.get_note_assignee_user_ids(note.id)
+                    
+                    if not user_ids:
+                        return {"status": "skipped", "note_id": note.id, "reason": "no_assignees"}
                 
-                # ノート→タスク生成（既存関数は冪等）
-                tasks = await generate_tasks_from_note(note.id, note.text, user_id)
+                # ノート→タスク生成（1回のLLM呼び出しで全user_ids分のタスク生成）
+                tasks = await generate_tasks_from_note(note.id, note.text, user_ids)
                 tasks_count = len(tasks)
                 total_tasks_generated += tasks_count
                 

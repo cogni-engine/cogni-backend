@@ -29,3 +29,14 @@ class NoteRepository(BaseRepository[Note, NoteCreate, NoteUpdate]):
         )
         response = query.execute()
         return self._to_models(response.data)
+
+    async def get_note_assignee_user_ids(self, note_id: int) -> List[str]:
+        """Get user IDs of all assignees for a note"""
+        response = (
+            self._client.table("workspace_member_note")
+            .select("workspace_member!inner(user_id)")
+            .eq("note_id", note_id)
+            .eq("workspace_member_note_role", "assignee")
+            .execute()
+        )
+        return [item["workspace_member"]["user_id"] for item in response.data]
