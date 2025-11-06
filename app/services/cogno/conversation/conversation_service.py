@@ -4,10 +4,10 @@ import json
 from typing import AsyncGenerator, List, Dict, Optional
 
 from app.models.ai_message import AIMessage, AIMessageCreate, MessageRole
-from app.models.task import Task
 from app.models.notification import Notification
 from app.infra.supabase.repositories.ai_messages import AIMessageRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
+from app.infra.supabase.repositories.notes import NoteRepository
 from app.infra.supabase.client import get_supabase_client
 from app.services.llm.call_llm import LLMService
 from .prompts.conversation_prompt import build_conversation_prompt
@@ -21,7 +21,6 @@ async def conversation_stream(
     thread_id: int,
     user_message: Optional[str] = None,
     focused_task_id: Optional[int] = None,
-    next_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
     timer_duration: Optional[int] = None,  # 秒単位に統一
@@ -59,6 +58,7 @@ async def conversation_stream(
     supabase_client = get_supabase_client()
     ai_message_repo = AIMessageRepository(supabase_client)
     task_repo = TaskRepository(supabase_client)
+    note_repo = NoteRepository(supabase_client)
     
     try:
         # Save user message (skip if None - e.g., timer completion trigger)
@@ -81,15 +81,29 @@ async def conversation_stream(
         else:
             logger.info("No focused task")
 
-        # Get next task details if provided
-        next_task = None
-        if next_task_id:
-            next_task = await task_repo.find_by_id(next_task_id)
-            if next_task:
-                logger.info(f"Next task: {next_task_id} - {next_task.title}")
-            else:
-                logger.info(f"Next task: {next_task_id} (not found)")
-        
+        # Get related tasks from source note if focused task has source_note_id
+        related_tasks_info = None
+        source_note_title = None
+        if focused_task and focused_task.source_note_id:
+            related_tasks = await task_repo.find_by_note(focused_task.source_note_id)
+            # タイトルとステータスを含めた情報を取得
+            related_tasks_info = [
+                {
+                    "title": task.title,
+                    "status": task.status or "pending"
+                }
+                for task in related_tasks
+            ]
+            logger.info(f"Found {len(related_tasks_info)} related tasks from source note {focused_task.source_note_id}")
+            
+            # Get source note title
+            source_note = await note_repo.find_by_id(focused_task.source_note_id)
+            if source_note:
+                # Extract title from first line of note text
+                note_lines = source_note.text.split('\n')
+                source_note_title = note_lines[0] if note_lines else "Untitled"
+                logger.info(f"Source note title: {source_note_title}")
+
         # Get message history
         message_history = await ai_message_repo.find_by_thread(thread_id)
         
@@ -106,7 +120,8 @@ async def conversation_stream(
         # Build system prompt with task context and timer request if needed
         system_content = build_conversation_prompt(
             focused_task=focused_task,
-            next_task=next_task,
+            related_tasks_info=related_tasks_info,
+            source_note_title=source_note_title,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,
@@ -118,6 +133,14 @@ async def conversation_stream(
             task_to_complete=task_to_complete,
             task_completion_confirmed=task_completion_confirmed
         )
+        
+        # Print system prompt in a visible way with emojis
+        print("=" * 80)
+        print("📝 SYSTEM PROMPT 📝")
+        print("=" * 80)
+        print(system_content)
+        print("=" * 80)
+        
         messages.append({"role": "system", "content": system_content})
         
         logger.info(f"Using model: {STREAM_CHAT_MODEL}")

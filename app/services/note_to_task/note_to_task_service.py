@@ -50,9 +50,14 @@ async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[
     # 現在の日時を取得（日本時間）
     current_datetime = get_current_datetime_ja()
     
+    # ノートタイトルを抽出（最初の行を取得、空の場合は"Untitled"）
+    note_lines = note_text.split('\n')
+    note_title = note_lines[0].strip() if note_lines and note_lines[0].strip() else "Untitled"
+    
     # LangChain チェーンの構築と実行（1回のみ）
     result: TaskListResponse = await (prompt_template | structured_llm).ainvoke({
         "current_datetime": current_datetime,
+        "note_title": note_title,
         "_note_text": note_text
     })
     

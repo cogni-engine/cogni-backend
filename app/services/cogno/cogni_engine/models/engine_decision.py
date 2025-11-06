@@ -32,8 +32,4 @@ class EngineDecision(BaseModel):
             "Be strict in judgment."
         )
     )
-    next_task_id: Optional[int] = Field(
-        None,
-        description="ID of the next recommended task after current focused task is completed"
-    )
 
