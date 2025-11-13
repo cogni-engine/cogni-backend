@@ -4,33 +4,60 @@ from app.services.note_to_task import generate_tasks_from_note
 from app.services.task_to_notification import generate_notifications_from_tasks_batch
 from app.infra.supabase.repositories.workspaces import WorkspaceRepository, WorkspaceMemberRepository
 import asyncio
+from typing import List, Optional
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
+# 開発者のuser_id（本番・local両方で同じ）
+DEV_USER_IDS = [
+    "58e744e7-ec0f-45e1-a63a-bc6ed71e10de",
+]
 
-@router.post("/sync-memories")
-async def sync_memories():
+
+async def _process_notes_sync(
+    minutes_ago: int,
+    user_id_filter: Optional[List[str]] = None,
+    exclude_user_ids: bool = False
+) -> dict:
     """
-    5分ごとのCRON実行用エンドポイント
-    - 5分前から現在までに更新されたノートのみを処理
-    - ノート→タスク生成→通知生成（一連の流れを完結）
+    ノート同期の共通処理
+    
+    Args:
+        minutes_ago: 何分前から更新されたノートを取得するか
+        user_id_filter: 指定されたuser_idのworkspaceのノートのみ処理（Noneの場合は全て）
+        exclude_user_ids: Trueの場合、user_id_filterに含まれるuser_idを除外
+    
+    Returns:
+        処理結果の統計情報
     """
     from datetime import datetime, timedelta, timezone
     from app.infra.supabase.repositories.notes import NoteRepository
     import logging
     
     logger = logging.getLogger(__name__)
-    logger.info("🔄 CRON: Starting sync-memories")
     
-    # 1分前からのデータを取得
-    one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    filter_desc = ""
+    if user_id_filter:
+        if exclude_user_ids:
+            filter_desc = " (excluding dev users)"
+        else:
+            filter_desc = " (dev users only)"
+    
+    logger.info(f"🔄 CRON: Starting sync-memories{filter_desc}")
+    
+    # 指定時間前からのデータを取得
+    time_ago = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
     
     note_repo = NoteRepository(supabase)
     
-    # 更新されたノートのみ取得（タスクは追跡しない）
-    updated_notes = await note_repo.find_updated_since(one_minute_ago)
+    # 更新されたノートのみ取得（user_idフィルタ適用）
+    updated_notes = await note_repo.find_updated_since(
+        time_ago, 
+        user_id_filter=user_id_filter,
+        exclude_user_ids=exclude_user_ids
+    )
     
-    logger.info(f"Found {len(updated_notes)} updated notes")
+    logger.info(f"Found {len(updated_notes)} updated notes{filter_desc}")
     
     # セマフォで並列実行数を制限（10並列）
     semaphore = asyncio.Semaphore(10)
@@ -111,7 +138,7 @@ async def sync_memories():
     # 結果集計
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
     
-    logger.info(f"🎉 CRON completed: {success}/{len(updated_notes)} notes processed")
+    logger.info(f"🎉 CRON completed: {success}/{len(updated_notes)} notes processed{filter_desc}")
     logger.info(f"📊 Generated {total_tasks_generated} tasks and ~{total_notifications_generated} notifications")
     
     return {
@@ -121,3 +148,33 @@ async def sync_memories():
         "tasks_generated": total_tasks_generated,
         "notifications_generated": total_notifications_generated
     }
+
+
+@router.post("/sync-memories")
+async def sync_memories():
+    """
+    本番用CRON実行エンドポイント（5分ごと）
+    - 5分前から現在までに更新されたノートのみを処理
+    - 開発者のworkspaceを除外
+    - ノート→タスク生成→通知生成（一連の流れを完結）
+    """
+    return await _process_notes_sync(
+        minutes_ago=5,
+        user_id_filter=DEV_USER_IDS,
+        exclude_user_ids=True
+    )
+
+
+@router.post("/sync-memories-local")
+async def sync_memories_local():
+    """
+    ローカル開発用CRON実行エンドポイント（1分ごと）
+    - 1分前から現在までに更新されたノートのみを処理
+    - 開発者のworkspaceのみを処理
+    - ノート→タスク生成→通知生成（一連の流れを完結）
+    """
+    return await _process_notes_sync(
+        minutes_ago=1,
+        user_id_filter=DEV_USER_IDS,
+        exclude_user_ids=False
+    )
