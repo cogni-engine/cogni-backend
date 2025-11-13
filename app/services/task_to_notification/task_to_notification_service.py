@@ -171,21 +171,21 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
             
             # 最初のタスクに紐づける
             primary_task = user_tasks[0]
-            
-            try:
-                notification_create = NotificationCreate(
-                    title=notif.title,
-                    content=full_content,
-                    due_date=notif.due_date,
-                    task_id=primary_task.id,
+        
+        try:
+            notification_create = NotificationCreate(
+                title=notif.title,
+                content=full_content,
+                due_date=notif.due_date,
+                task_id=primary_task.id,
                     user_id=user_id,
-                    status=NotificationStatus.SCHEDULED
-                )
-                saved_notification = await notification_repo.create(notification_create)
-                saved_notifications.append(saved_notification)
-                logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
-            except Exception as e:
-                logger.error(f"Failed to save notification for user {user_id}: {e}")
-                continue
+                status=NotificationStatus.SCHEDULED
+            )
+            saved_notification = await notification_repo.create(notification_create)
+            saved_notifications.append(saved_notification)
+            logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
+        except Exception as e:
+            logger.error(f"Failed to save notification for user {user_id}: {e}")
+            continue
     
     return saved_notifications
