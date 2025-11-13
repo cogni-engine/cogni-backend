@@ -152,28 +152,40 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
         logger.info("No notifications generated for task batch")
         return []
     
-    # 通知を保存（最初のタスクに紐づける）
+    # 通知を保存（各タスクのuser_idごとに保存）
     saved_notifications: List[Notification] = []
-    primary_task = tasks[0]  # 最初のタスクを代表とする
+    
+    # 各タスクのuser_idを取得（重複を除く）
+    user_ids = list(set(task.user_id for task in tasks))
     
     for notif in result.notifications:
         suggestions_text = "\n\n【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
         full_content = notif.content + suggestions_text
         
-        try:
-            notification_create = NotificationCreate(
-                title=notif.title,
-                content=full_content,
-                due_date=notif.due_date,
-                task_id=primary_task.id,
-                user_id=primary_task.user_id,
-                status=NotificationStatus.SCHEDULED
-            )
-            saved_notification = await notification_repo.create(notification_create)
-            saved_notifications.append(saved_notification)
-            logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id})")
-        except Exception as e:
-            logger.error(f"Failed to save notification: {e}")
-            continue
+        # 各ユーザーごとに通知を保存
+        for user_id in user_ids:
+            # そのユーザーのタスクを取得
+            user_tasks = [t for t in tasks if t.user_id == user_id]
+            if not user_tasks:
+                continue
+            
+            # 最初のタスクに紐づける
+            primary_task = user_tasks[0]
+            
+            try:
+                notification_create = NotificationCreate(
+                    title=notif.title,
+                    content=full_content,
+                    due_date=notif.due_date,
+                    task_id=primary_task.id,
+                    user_id=user_id,
+                    status=NotificationStatus.SCHEDULED
+                )
+                saved_notification = await notification_repo.create(notification_create)
+                saved_notifications.append(saved_notification)
+                logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
+            except Exception as e:
+                logger.error(f"Failed to save notification for user {user_id}: {e}")
+                continue
     
     return saved_notifications
