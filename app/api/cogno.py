@@ -1,27 +1,36 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Cookie
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 
 from app.infra.supabase.repositories.notifications import NotificationRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
-from app.infra.supabase.repositories.ai_messages import AIMessageRepository
 from app.infra.supabase.client import get_supabase_client
 from app.services.cogno.cogni_engine.engine_service import make_engine_decision, extract_timer_duration, _convert_tasks_to_simple_dict
 from app.services.cogno.conversation.conversation_service import conversation_stream
 from app.models.ai_message import MessageRole
+from typing import List
 
 router = APIRouter(prefix="/api/cogno", tags=["cogno"])
 
 
-async def get_previous_task_to_complete(thread_id: int) -> Optional[int]:
-    """Get previous task_to_complete_id from last assistant message"""
-    supabase_client = get_supabase_client()
-    ai_message_repo = AIMessageRepository(supabase_client)
-    recent = await ai_message_repo.get_recent_messages(thread_id, limit=1)
-    if recent and recent[0].role == MessageRole.ASSISTANT and recent[0].meta:
-        return recent[0].meta.get("task_to_complete_id")
+class SimpleMessage(BaseModel):
+    """Simple message model for API requests (without DB fields)"""
+    role: MessageRole
+    content: str
+    meta: Optional[Dict[str, Any]] = None
+
+
+def get_previous_task_to_complete_from_messages(messages: List[SimpleMessage]) -> Optional[int]:
+    """Get previous task_to_complete_id from last assistant message in the message history"""
+    # Find the last assistant message
+    for msg in reversed(messages):
+        if msg.role == MessageRole.ASSISTANT:
+            # Check if message has meta with task_to_complete_id
+            if msg.meta:
+                return msg.meta.get("task_to_complete_id")
+            break
     return None
 
 
@@ -38,13 +47,17 @@ async def complete_task_background(task_id: int):
 
 class ConversationStreamRequest(BaseModel):
     thread_id: int
-    message: str
+    messages: List[SimpleMessage]
     notification_id: Optional[int] = None
     timer_completed: Optional[bool] = None
 
 
 @router.post("/conversations/stream")
-async def stream_conversation(request: ConversationStreamRequest, background_tasks: BackgroundTasks):
+async def stream_conversation(
+    request: ConversationStreamRequest, 
+    background_tasks: BackgroundTasks,
+    current_user_id: Optional[str] = Cookie(None)
+):
     """
     Stream a conversation with Cogno AI.
     
@@ -55,6 +68,8 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
     4. If task_to_complete_id: Check if 2nd consecutive -> complete task in background
     5. Conversation AI responds with timer info in meta
     """
+    logging.info(f"current_user_id from cookie: {current_user_id}")
+    
     # Handle notification trigger
     if request.notification_id:
         supabase_client = get_supabase_client()
@@ -97,16 +112,19 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
                 "Connection": "keep-alive",
             }
         )
+
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
     
     # Make engine decision with current user message (also returns pending tasks)
-    decision, pending_tasks = await make_engine_decision(request.thread_id, request.message)
+    decision, pending_tasks = await make_engine_decision(current_user_id, request.messages)
     logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}, task_to_complete_id={decision.task_to_complete_id}, pending_tasks_count={len(pending_tasks)}")
     
     # If engine decided to start timer, extract duration
     timer_duration = None
     timer_started = False
     if decision.should_start_timer:
-        timer_duration = extract_timer_duration(request.message)
+        timer_duration = extract_timer_duration(request.messages[-1].content)
         logging.info(f"Timer duration extraction result: {timer_duration} seconds" if timer_duration else "No duration found in message")
         if timer_duration:
             timer_started = True
@@ -119,7 +137,7 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
     # Check for task completion (2-stage confirmation)
     task_completion_confirmed = False
     if decision.task_to_complete_id:
-        previous_task_to_complete = await get_previous_task_to_complete(request.thread_id)
+        previous_task_to_complete = get_previous_task_to_complete_from_messages(request.messages)
         if previous_task_to_complete == decision.task_to_complete_id:
             # 2nd consecutive time -> confirm and complete
             task_completion_confirmed = True
@@ -141,14 +159,16 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
     return StreamingResponse(
         conversation_stream(
             thread_id=request.thread_id,
-            user_message=request.message,
+            user_message=request.messages[-1].content,
             focused_task_id=decision.focused_task_id,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,
             task_list_for_suggestion=task_list_for_suggestion,
             task_to_complete_id=decision.task_to_complete_id,
-            task_completion_confirmed=task_completion_confirmed
+            task_completion_confirmed=task_completion_confirmed,
+            all_user_tasks=pending_tasks,
+            message_history=request.messages
         ),
         media_type="text/event-stream",
         headers={
@@ -161,9 +181,12 @@ async def stream_conversation(request: ConversationStreamRequest, background_tas
 @router.get("/threads/{thread_id}/messages")
 async def get_thread_messages(
     thread_id: int,
-    since: Optional[int] = Query(None, description="Only return messages after this message ID")
+    since: Optional[int] = Query(None, description="Only return messages after this message ID"),
+    current_user_id: Optional[str] = Cookie(None)
 ):
     """Get messages for a specific thread (optionally since a given message ID)"""
+    logging.info(f"current_user_id from cookie: {current_user_id}")
+    
     from app.infra.supabase.repositories.ai_messages import AIMessageRepository
     from app.config import supabase
     

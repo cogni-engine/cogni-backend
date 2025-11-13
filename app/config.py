@@ -17,3 +17,6 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 # Webhook secret
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
+# Client URL for CORS
+CLIENT_URL = os.getenv("CLIENT_URL", "http://localhost:3000")
+
