@@ -1,18 +1,27 @@
 """Conversation Service - User-facing AI chat with streaming"""
 import logging
 import json
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import AsyncGenerator, List, Dict, Optional, Protocol, Any
+from collections.abc import Sequence
 
-from app.models.ai_message import AIMessage, AIMessageCreate, MessageRole
+from app.models.ai_message import AIMessageCreate, MessageRole
 from app.models.notification import Notification
+from app.models.task import Task
 from app.infra.supabase.repositories.ai_messages import AIMessageRepository
-from app.infra.supabase.repositories.tasks import TaskRepository
-from app.infra.supabase.repositories.notes import NoteRepository
 from app.infra.supabase.client import get_supabase_client
 from app.services.llm.call_llm import LLMService
+from app.services.file_processor.file_processor import build_file_context
+from app.services.llm.message_builder import build_message_with_files
 from .prompts.conversation_prompt import build_conversation_prompt
 
 logger = logging.getLogger(__name__)
+
+
+class MessageLike(Protocol):
+    """Protocol for any message-like object with role and content"""
+    role: MessageRole
+    content: str
+    files: Optional[List[Any]]
 
 STREAM_CHAT_MODEL = "chatgpt-4o-latest"
 
@@ -20,6 +29,7 @@ STREAM_CHAT_MODEL = "chatgpt-4o-latest"
 async def conversation_stream(
     thread_id: int,
     user_message: Optional[str] = None,
+    file_ids: Optional[List[int]] = None,  # NEW: File attachments
     focused_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
@@ -32,6 +42,11 @@ async def conversation_stream(
     task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
     task_to_complete_id: Optional[int] = None,  # 完了候補タスクID
     task_completion_confirmed: bool = False,  # 完了確定フラグ
+    all_user_tasks: Optional[List[Task]] = None,  # All tasks for the user (from engine)
+    message_history: Optional[Sequence[MessageLike]] = None,  # Message history (to avoid refetching)
+    workspace_info: Optional[Dict[str, Any]] = None,  # Workspace information
+    workspace_members_info: Optional[List[Dict[str, Any]]] = None,  # Workspace members with profiles
+    notes_data: Optional[Dict[str, Any]] = None,  # Note data from find_by_id_with_note_and_members
 ) -> AsyncGenerator[str, None]:
     """
     Stream conversation AI response.
@@ -51,14 +66,14 @@ async def conversation_stream(
         task_list_for_suggestion: Task list for suggestion when no focused task
         task_to_complete_id: Task ID to potentially complete
         task_completion_confirmed: Whether task completion is confirmed (2nd time)
+        all_user_tasks: All tasks for the user (from engine, to avoid refetching)
+        message_history: Message history (to avoid refetching)
         
     Yields:
         SSE-formatted stream chunks
     """
     supabase_client = get_supabase_client()
     ai_message_repo = AIMessageRepository(supabase_client)
-    task_repo = TaskRepository(supabase_client)
-    note_repo = NoteRepository(supabase_client)
     
     try:
         # Save user message (skip if None - e.g., timer completion trigger)
@@ -66,62 +81,116 @@ async def conversation_stream(
             user_msg_create = AIMessageCreate(
                 content=user_message,
                 thread_id=thread_id,
-                role=MessageRole.USER
+                role=MessageRole.USER,
+                file_ids=file_ids  # NEW: Include file attachments
             )
             await ai_message_repo.create(user_msg_create)
         
-        # Get focused task details
+        # Get focused task details from all_user_tasks
         focused_task = None
-        if focused_task_id:
-            focused_task = await task_repo.find_by_id(focused_task_id)
+        related_tasks_info = None
+        source_note_title = None
+        source_note_id = None
+        note_mention = None
+        
+        if focused_task_id and all_user_tasks:
+            # Find focused task from already-fetched all_user_tasks
+            focused_task = next((task for task in all_user_tasks if task.id == focused_task_id), None)
+            
             if focused_task:
+                source_note_id = focused_task.source_note_id
                 logger.info(f"Focused task: {focused_task_id} - {focused_task.title}")
+                
+                # Get related tasks from the same source note
+                if focused_task.source_note_id:
+                    related_tasks = [
+                        task for task in all_user_tasks 
+                        if task.source_note_id == focused_task.source_note_id
+                    ]
+                    related_tasks_info = [
+                        {
+                            "title": task.title,
+                            "status": task.status or "pending"
+                        }
+                        for task in related_tasks
+                    ]
+                    logger.info(f"Found {len(related_tasks_info)} related tasks from source note {focused_task.source_note_id} (from cached tasks)")
+                    
+                    # Extract source note title from notes_data passed from cogno.py
+                    if notes_data:
+                        note_text = notes_data.get('text', '')
+                        note_lines = note_text.split('\n')
+                        source_note_title = note_lines[0] if note_lines else "Untitled"
+                        logger.info(f"Source note title: {source_note_title}")
+                
+                if source_note_id:
+                    note_label = source_note_title or f"ノート {source_note_id}"
+                    note_mention = _format_note_mention(source_note_id, note_label)
             else:
-                logger.info(f"Focused task: {focused_task_id} (not found)")
+                logger.info(f"Focused task: {focused_task_id} (not found in all_user_tasks)")
         else:
             logger.info("No focused task")
 
-        # Get related tasks from source note if focused task has source_note_id
-        related_tasks_info = None
-        source_note_title = None
-        if focused_task and focused_task.source_note_id:
-            related_tasks = await task_repo.find_by_note(focused_task.source_note_id)
-            # タイトルとステータスを含めた情報を取得
-            related_tasks_info = [
-                {
-                    "title": task.title,
-                    "status": task.status or "pending"
-                }
-                for task in related_tasks
-            ]
-            logger.info(f"Found {len(related_tasks_info)} related tasks from source note {focused_task.source_note_id}")
-            
-            # Get source note title
-            source_note = await note_repo.find_by_id(focused_task.source_note_id)
-            if source_note:
-                # Extract title from first line of note text
-                note_lines = source_note.text.split('\n')
-                source_note_title = note_lines[0] if note_lines else "Untitled"
-                logger.info(f"Source note title: {source_note_title}")
-
-        # Get message history
-        message_history = await ai_message_repo.find_by_thread(thread_id)
+        # Get message history (use passed history if available, otherwise fetch)
+        final_message_history: Sequence[MessageLike]
+        if message_history is None:
+            final_message_history = await ai_message_repo.find_by_thread(thread_id)
+            logger.info(f"Fetched message history: {len(final_message_history)} messages")
+        else:
+            final_message_history = message_history
+            logger.info(f"Using passed message history: {len(final_message_history)} messages")
         
-        # Convert to LLM format
-        messages = _convert_to_llm_format(message_history)
+        # Convert to LLM format (with file support for images)
+        messages = await _convert_to_llm_format_with_files(final_message_history, supabase_client)
         
-        # Get task for completion confirmation if needed
+        # Get task for completion confirmation if needed (from cached pending tasks)
         task_to_complete = None
-        if task_to_complete_id and not task_completion_confirmed:
-            task_to_complete = await task_repo.find_by_id(task_to_complete_id)
+        if task_to_complete_id and not task_completion_confirmed and all_user_tasks:
+            # Find task from already-fetched pending tasks
+            task_to_complete = next((task for task in all_user_tasks if task.id == task_to_complete_id), None)
             if task_to_complete:
-                logger.info(f"Task to complete (confirmation): {task_to_complete_id} - {task_to_complete.title}")
+                logger.info(f"Task to complete (confirmation): {task_to_complete_id} - {task_to_complete.title} (from cached tasks)")
+            else:
+                logger.info(f"Task to complete {task_to_complete_id} not found in cached tasks")
+        
+        # Build file context if files are attached
+        file_context = None
+        if file_ids:
+            file_context = await build_file_context(supabase_client, file_ids)
+            if file_context:
+                logger.info(f"Built file context for {len(file_ids)} files")
+        
+        # Prepare workspace/workspace member mention tags
+        workspace_mention = None
+        workspace_member_mentions: Optional[List[Dict[str, str]]] = None
+        
+        if workspace_info and workspace_info.get('id'):
+            workspace_id = workspace_info['id']
+            workspace_label = workspace_info.get('title') or f"ワークスペース {workspace_id}"
+            workspace_mention = _format_workspace_mention(workspace_id, workspace_label)
+        
+        if workspace_members_info:
+            workspace_member_mentions = []
+            for member in workspace_members_info:
+                member_id = member.get('id')
+                if not member_id:
+                    continue
+                user_profile = member.get('user_profiles') or {}
+                member_label = user_profile.get('name') or f"メンバー {member_id}"
+                member_mention = _format_member_mention(member_id, member_label)
+                workspace_member_mentions.append({
+                    "mention": member_mention,
+                    "role": member.get('role', 'member'),
+                    "label": member_label
+                })
         
         # Build system prompt with task context and timer request if needed
         system_content = build_conversation_prompt(
             focused_task=focused_task,
             related_tasks_info=related_tasks_info,
             source_note_title=source_note_title,
+            source_note_id=source_note_id,
+             note_mention=note_mention,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,
             timer_duration=timer_duration,
@@ -131,7 +200,12 @@ async def conversation_stream(
             daily_summary_context=daily_summary_context,
             task_list_for_suggestion=task_list_for_suggestion,
             task_to_complete=task_to_complete,
-            task_completion_confirmed=task_completion_confirmed
+            task_completion_confirmed=task_completion_confirmed,
+            file_context=file_context,  # NEW: Add file context to prompt
+            workspace_info=workspace_info,
+            workspace_members_info=workspace_members_info,
+            workspace_mention=workspace_mention,
+            workspace_member_mentions=workspace_member_mentions
         )
         
         # Print system prompt in a visible way with emojis
@@ -226,10 +300,60 @@ async def conversation_stream(
         raise
 
 
-def _convert_to_llm_format(messages: List[AIMessage]) -> List[Dict[str, str]]:
-    """Convert AIMessage list to LLM format"""
+def _convert_to_llm_format(messages: Sequence[MessageLike]) -> List[Dict[str, str]]:
+    """Convert message-like objects to LLM format (simple version)"""
     return [
-        {"role": msg.role.value, "content": msg.content}
+        {"role": msg.role, "content": msg.content}
         for msg in messages
     ]
+
+
+async def _convert_to_llm_format_with_files(
+    messages: Sequence[MessageLike],
+    supabase_client
+) -> List[Dict[str, Any]]:
+    """
+    Convert message-like objects to LLM format with file support.
+    For user messages with image attachments, includes images in content array.
+    """
+    llm_messages = []
+    
+    for msg in messages:
+        # Check if message has files (only AIMessage has this attribute)
+        has_files = hasattr(msg, 'files') and msg.files
+        
+        if has_files and msg.role == MessageRole.USER:
+            # User message with files - use message builder
+            file_ids = [file.id for file in msg.files]  # type: ignore
+            llm_msg = await build_message_with_files(
+                role=msg.role,
+                content=msg.content,
+                file_ids=file_ids,
+                supabase_client=supabase_client
+            )
+            llm_messages.append(llm_msg)
+        else:
+            # Simple text message
+            llm_messages.append({"role": msg.role, "content": msg.content})
+    
+    return llm_messages
+
+
+def _escape_label(label: str) -> str:
+    return label.replace('"', "'")
+
+
+def _format_note_mention(note_id: int, label: str) -> str:
+    safe_label = _escape_label(label)
+    return f'[# id="note-{note_id}" label="{safe_label}" noteId="{note_id}"]'
+
+
+def _format_workspace_mention(workspace_id: int, label: str) -> str:
+    safe_label = _escape_label(label)
+    return f'[# id="workspace-{workspace_id}" label="{safe_label}" workspaceId="{workspace_id}"]'
+
+
+def _format_member_mention(member_id: int, label: str) -> str:
+    safe_label = _escape_label(label)
+    return f'[@ id="member-{member_id}" label="{safe_label}" workspaceMemberId="{member_id}"]'
 
