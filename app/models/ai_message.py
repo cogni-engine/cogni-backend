@@ -1,6 +1,6 @@
 """AI Message domain model"""
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 from enum import Enum
 
@@ -10,6 +10,15 @@ class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+
+
+class MessageFile(BaseModel):
+    """File attachment model"""
+    id: int
+    original_filename: str
+    file_path: str
+    mime_type: str
+    file_size: int
 
 
 class AIMessageBase(BaseModel):
@@ -22,7 +31,7 @@ class AIMessageBase(BaseModel):
 
 class AIMessageCreate(AIMessageBase):
     """AI message creation model"""
-    pass
+    file_ids: Optional[List[int]] = None
 
 
 class AIMessageUpdate(BaseModel):
@@ -35,6 +44,7 @@ class AIMessage(AIMessageBase):
     """Complete AI message model from database"""
     id: int
     created_at: datetime
+    files: Optional[List[MessageFile]] = None
     
     class Config:
         from_attributes = True

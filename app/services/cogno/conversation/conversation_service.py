@@ -1,16 +1,18 @@
 """Conversation Service - User-facing AI chat with streaming"""
 import logging
 import json
-from typing import AsyncGenerator, List, Dict, Optional, Protocol
+from typing import AsyncGenerator, List, Dict, Optional, Protocol, Any
 from collections.abc import Sequence
 
-from app.models.ai_message import AIMessageCreate, MessageRole
+from app.models.ai_message import AIMessageCreate, MessageRole, AIMessage
 from app.models.notification import Notification
 from app.models.task import Task
 from app.infra.supabase.repositories.ai_messages import AIMessageRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
 from app.infra.supabase.client import get_supabase_client
 from app.services.llm.call_llm import LLMService
+from app.services.file_processor.file_processor import build_file_context
+from app.services.llm.message_builder import build_message_with_files
 from .prompts.conversation_prompt import build_conversation_prompt
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ STREAM_CHAT_MODEL = "chatgpt-4o-latest"
 async def conversation_stream(
     thread_id: int,
     user_message: Optional[str] = None,
+    file_ids: Optional[List[int]] = None,  # NEW: File attachments
     focused_task_id: Optional[int] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
@@ -76,7 +79,8 @@ async def conversation_stream(
             user_msg_create = AIMessageCreate(
                 content=user_message,
                 thread_id=thread_id,
-                role=MessageRole.USER
+                role=MessageRole.USER,
+                file_ids=file_ids  # NEW: Include file attachments
             )
             await ai_message_repo.create(user_msg_create)
         
@@ -130,8 +134,8 @@ async def conversation_stream(
             final_message_history = message_history
             logger.info(f"Using passed message history: {len(final_message_history)} messages")
         
-        # Convert to LLM format
-        messages = _convert_to_llm_format(final_message_history)
+        # Convert to LLM format (with file support for images)
+        messages = await _convert_to_llm_format_with_files(final_message_history, supabase_client)
         
         # Get task for completion confirmation if needed (from cached pending tasks)
         task_to_complete = None
@@ -142,6 +146,13 @@ async def conversation_stream(
                 logger.info(f"Task to complete (confirmation): {task_to_complete_id} - {task_to_complete.title} (from cached tasks)")
             else:
                 logger.info(f"Task to complete {task_to_complete_id} not found in cached tasks")
+        
+        # Build file context if files are attached
+        file_context = None
+        if file_ids:
+            file_context = await build_file_context(supabase_client, file_ids)
+            if file_context:
+                logger.info(f"Built file context for {len(file_ids)} files")
         
         # Build system prompt with task context and timer request if needed
         system_content = build_conversation_prompt(
@@ -157,7 +168,8 @@ async def conversation_stream(
             daily_summary_context=daily_summary_context,
             task_list_for_suggestion=task_list_for_suggestion,
             task_to_complete=task_to_complete,
-            task_completion_confirmed=task_completion_confirmed
+            task_completion_confirmed=task_completion_confirmed,
+            file_context=file_context  # NEW: Add file context to prompt
         )
         
         # Print system prompt in a visible way with emojis
@@ -253,9 +265,40 @@ async def conversation_stream(
 
 
 def _convert_to_llm_format(messages: Sequence[MessageLike]) -> List[Dict[str, str]]:
-    """Convert message-like objects to LLM format"""
+    """Convert message-like objects to LLM format (simple version)"""
     return [
         {"role": msg.role, "content": msg.content}
         for msg in messages
     ]
+
+
+async def _convert_to_llm_format_with_files(
+    messages: Sequence[MessageLike],
+    supabase_client
+) -> List[Dict[str, Any]]:
+    """
+    Convert message-like objects to LLM format with file support.
+    For user messages with image attachments, includes images in content array.
+    """
+    llm_messages = []
+    
+    for msg in messages:
+        # Check if message has files (only AIMessage has this attribute)
+        has_files = hasattr(msg, 'files') and msg.files
+        
+        if has_files and msg.role == MessageRole.USER:
+            # User message with files - use message builder
+            file_ids = [file.id for file in msg.files]  # type: ignore
+            llm_msg = await build_message_with_files(
+                role=msg.role,
+                content=msg.content,
+                file_ids=file_ids,
+                supabase_client=supabase_client
+            )
+            llm_messages.append(llm_msg)
+        else:
+            # Simple text message
+            llm_messages.append({"role": msg.role, "content": msg.content})
+    
+    return llm_messages
 

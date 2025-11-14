@@ -20,6 +20,7 @@ class SimpleMessage(BaseModel):
     role: MessageRole
     content: str
     meta: Optional[Dict[str, Any]] = None
+    file_ids: Optional[List[int]] = None
 
 
 def get_previous_task_to_complete_from_messages(messages: List[SimpleMessage]) -> Optional[int]:
@@ -154,12 +155,16 @@ async def stream_conversation(
         task_list_for_suggestion = _convert_tasks_to_simple_dict(pending_tasks)
         logging.info(f"Providing {len(task_list_for_suggestion)} tasks for suggestion")
     
+    # Extract file_ids from the last user message
+    file_ids = request.messages[-1].file_ids if request.messages and hasattr(request.messages[-1], 'file_ids') else None
+    
     # Stream conversation response with engine decision context
     # Timer info will be saved in AI message meta, not as separate system message
     return StreamingResponse(
         conversation_stream(
             thread_id=request.thread_id,
             user_message=request.messages[-1].content,
+            file_ids=file_ids,
             focused_task_id=decision.focused_task_id,
             should_ask_timer=should_ask_timer,
             timer_started=timer_started,

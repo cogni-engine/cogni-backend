@@ -211,7 +211,8 @@ def build_conversation_prompt(
     daily_summary_context: Optional[str] = None,
     task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
     task_to_complete: Optional[Task] = None,  # 完了確認対象タスク
-    task_completion_confirmed: bool = False  # 完了確定フラグ
+    task_completion_confirmed: bool = False,  # 完了確定フラグ
+    file_context: Optional[str] = None  # NEW: File attachments context
 ) -> str:
     """
     Build conversation AI system prompt.
@@ -236,6 +237,10 @@ def build_conversation_prompt(
     # Add current time
     current_time = get_current_datetime_ja()
     base_prompt += f"\n\n現在時刻: {current_time}"
+    
+    # Add file context if available
+    if file_context:
+        base_prompt += "\n\n" + file_context
     
     # Add task context if available
     if focused_task:
