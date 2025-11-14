@@ -157,6 +157,21 @@ async def stream_conversation(
     
     # Extract file_ids from the last user message
     file_ids = request.messages[-1].file_ids if request.messages and hasattr(request.messages[-1], 'file_ids') else None
+    # Fetch workspace and members info if focused_task_id exists
+    workspace_info = None
+    workspace_members_info = None
+    notes_data = None
+    
+    if decision.focused_task_id:
+        supabase_client = get_supabase_client()
+        task_repo = TaskRepository(supabase_client)
+        task_with_full_context = await task_repo.find_by_id_with_note_and_members(decision.focused_task_id)
+        
+        if task_with_full_context:
+            workspace_info = task_with_full_context.get('workspace')
+            workspace_members_info = task_with_full_context.get('workspace_members', [])
+            notes_data = task_with_full_context.get('notes')
+            logging.info(f"Fetched workspace context: workspace_id={workspace_info.get('id') if workspace_info else None}, members_count={len(workspace_members_info)}")
     
     # Stream conversation response with engine decision context
     # Timer info will be saved in AI message meta, not as separate system message
@@ -173,7 +188,10 @@ async def stream_conversation(
             task_to_complete_id=decision.task_to_complete_id,
             task_completion_confirmed=task_completion_confirmed,
             all_user_tasks=pending_tasks,
-            message_history=request.messages
+            message_history=request.messages,
+            workspace_info=workspace_info,
+            workspace_members_info=workspace_members_info,
+            notes_data=notes_data
         ),
         media_type="text/event-stream",
         headers={

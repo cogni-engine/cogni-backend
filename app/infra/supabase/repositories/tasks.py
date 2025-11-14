@@ -66,6 +66,71 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
         
         return response.data[0]
     
+    async def find_by_id_with_note_and_members(self, task_id: int) -> Optional[Dict[str, Any]]:
+        """Find a task by ID with joined note, workspace, and workspace members data
+        
+        Returns a dict with:
+        - task data (all fields)
+        - 'notes': note data (id, text, workspace_id) or None
+        - 'workspace': workspace data (id, title, type) or None  
+        - 'workspace_members': list of workspace members with user profiles or []
+        
+        This is useful for mention functionality where we need to know all workspace members.
+        """
+        response = (
+            self._client.table(self._table_name)
+            .select("""
+                *,
+                notes:source_note_id(
+                    id,
+                    text,
+                    workspace_id,
+                    workspace:workspace_id(
+                        id,
+                        title,
+                        type,
+                        workspace_member(
+                            id,
+                            user_id,
+                            role,
+                            user_profiles:user_id(
+                                id,
+                                name,
+                                avatar_url
+                            )
+                        )
+                    )
+                )
+            """)
+            .eq("id", task_id)
+            .execute()
+        )
+        
+        if not response.data:
+            return None
+        
+        result = response.data[0]
+        
+        # Restructure to flatten workspace and members at the top level
+        if result.get('notes'):
+            note = result['notes']
+            if note.get('workspace'):
+                workspace = note['workspace']
+                # Extract workspace members and flatten
+                workspace_members = workspace.pop('workspace_member', [])
+                
+                # Add workspace and members as top-level keys
+                result['workspace'] = workspace
+                result['workspace_members'] = workspace_members
+            else:
+                result['workspace'] = None
+                result['workspace_members'] = []
+        else:
+            result['workspace'] = None
+            result['workspace_members'] = []
+        
+        return result
+    
     async def find_by_note(self, note_id: int) -> List[Task]:
         """Find tasks created from a specific note"""
         return await self.find_by_filters({"source_note_id": note_id})

@@ -186,11 +186,14 @@ FOCUSED_TASK_ADDITION = """
 RELATED_TASKS_ADDITION = """
 
 【このノートから生成されたやること】
-ノート: {source_note_title}
+ノートタグ: {note_mention_line}
 
 {formatted_tasks_list}
 
-これらは同じノート「{source_note_title}」から生成されたものです。関連性を意識しながら、今取り組んでいることの完遂をサポートしてください。
+これらは同じノート「{source_note_title}」から生成されたものです。
+ノートに言及する場合は、上記のタグをそのまま出力に埋め込んでください。属性名・順序・引用符を変更したり省略したりしてはいけません。
+
+関連性を意識しながら、今取り組んでいることの完遂をサポートしてください。
 目標は、ユーザがノートのすべてのやることを終わらせることです。そのために、今取り組んでいることを完璧に終わらせ、他のやることも順番に終わらせていきましょう。
 
 【注意】
@@ -198,10 +201,36 @@ RELATED_TASKS_ADDITION = """
 """
 
 
+WORKSPACE_ADDITION = """
+
+【ワークスペースとメンバー情報】
+- ワークスペースタグ: {workspace_line}
+- タイプ: {workspace_type}
+
+メンバータグ一覧（タグをそのまま使用すること）:
+{members_list}
+
+タグは一意のID（例: workspace-5, member-52）を含みます。必ず提示されたタグをそのまま会話で使用し、書式を変更しないでください。
+"""
+
+
+MENTION_RULES_ADDITION = """
+
+【メンション出力ルール（厳守）】
+- ノート／ワークスペース／ワークスペースメンバーに言及する際は、ここで提示されたタグをそのまま本文に挿入する。
+- タグの属性名・順序・引用符・IDを変更・省略・補完してはならない。
+- 新しい形式を作らず、提供されたタグをコピー＆ペーストする感覚で利用する。
+以下が今回利用できるタグ一覧:
+{mention_examples}
+"""
+
+
 def build_conversation_prompt(
     focused_task: Optional[Task] = None,
     related_tasks_info: Optional[List[Dict[str, str]]] = None,
     source_note_title: Optional[str] = None,
+    source_note_id: Optional[int] = None,
+    note_mention: Optional[str] = None,
     should_ask_timer: bool = False,
     timer_started: bool = False,
     timer_duration: Optional[int] = None,  # 秒単位に統一
@@ -212,15 +241,21 @@ def build_conversation_prompt(
     task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
     task_to_complete: Optional[Task] = None,  # 完了確認対象タスク
     task_completion_confirmed: bool = False,  # 完了確定フラグ
-    file_context: Optional[str] = None  # NEW: File attachments context
+    file_context: Optional[str] = None,  # NEW: File attachments context
+    workspace_info: Optional[Dict] = None,  # Workspace information
+    workspace_members_info: Optional[List[Dict]] = None,  # Workspace members with profiles
+    workspace_mention: Optional[str] = None,
+    workspace_member_mentions: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
     Build conversation AI system prompt.
     
     Args:
         focused_task: Task to focus on, or None
-        related_tasks_info: List of task info dictionaries with 'title' and 'status' from the same source note
-        source_note_title: Title of the source note from which tasks were generated
+        related_tasks_info: List of task info dictionaries with 'title' and 'status'
+        source_note_title: Title extracted from the source note
+        note_mention: Preformatted mention tag for the source note
+        source_note_id: Numeric ID of the source note
         should_ask_timer: Whether to ask user about timer duration
         timer_started: Whether timer was just started
         timer_duration: Duration of started timer in seconds
@@ -228,6 +263,14 @@ def build_conversation_prompt(
         notification_triggered: Whether notification was triggered
         notification_context: Single notification context (for click)
         daily_summary_context: Daily summary of multiple notifications
+        task_list_for_suggestion: Task list when no focused task exists
+        task_to_complete: Task currently pending completion confirmation
+        task_completion_confirmed: Whether completion is confirmed
+        file_context: Additional context generated from attached files
+        workspace_info: Workspace metadata dictionary
+        workspace_members_info: Workspace member info dictionaries
+        workspace_mention: Preformatted workspace mention tag
+        workspace_member_mentions: List of dicts containing member mention tags and roles
         
     Returns:
         Complete system prompt string
@@ -241,6 +284,22 @@ def build_conversation_prompt(
     # Add file context if available
     if file_context:
         base_prompt += "\n\n" + file_context
+    
+    # Add mention rules if we have predefined tags
+    mention_example_lines: List[str] = []
+    if note_mention:
+        mention_example_lines.append(f"- ノート: {note_mention}")
+    if workspace_mention:
+        mention_example_lines.append(f"- ワークスペース: {workspace_mention}")
+    if workspace_member_mentions:
+        for member in workspace_member_mentions:
+            label = member.get("label", "メンバー")
+            mention_text = member.get("mention")
+            if mention_text:
+                mention_example_lines.append(f"- メンバー（{label}）: {mention_text}")
+    if mention_example_lines:
+        mention_examples_text = "\n".join(mention_example_lines)
+        base_prompt += MENTION_RULES_ADDITION.format(mention_examples=mention_examples_text)
     
     # Add task context if available
     if focused_task:
@@ -258,6 +317,33 @@ def build_conversation_prompt(
         
         base_prompt += "\n\n" + task_context
         
+        # Add workspace context if available
+        if workspace_info:
+            workspace_title = workspace_info.get('title', '無題')
+            workspace_id = workspace_info.get('id')
+            workspace_type = workspace_info.get('type', 'personal')
+            
+            workspace_line = workspace_mention or f"ワークスペース「{workspace_title}」(ID: {workspace_id})"
+            
+            # Format members list using prepared mention tags
+            members_lines = []
+            if workspace_member_mentions:
+                for member in workspace_member_mentions:
+                    mention_text = member.get("mention")
+                    role = member.get("role", "member")
+                    if mention_text:
+                        members_lines.append(f"- {mention_text}（役割: {role}）")
+            if not members_lines:
+                members_lines.append("- （メンバータグがありません）")
+            
+            members_list = "\n".join(members_lines)
+            
+            base_prompt += "\n\n" + WORKSPACE_ADDITION.format(
+                workspace_line=workspace_line,
+                workspace_type=workspace_type,
+                members_list=members_list
+            )
+        
         # Add related tasks from source note if available
         if related_tasks_info and source_note_title:
             # ステータスを含めて整形
@@ -271,8 +357,10 @@ def build_conversation_prompt(
                 formatted_tasks.append(f"{checkbox} {task_info['title']}")
             
             formatted_tasks_list = "\n".join(formatted_tasks)
+            note_mention_line = note_mention or f"ノート「{source_note_title}」(ID: {source_note_id})"
             base_prompt += RELATED_TASKS_ADDITION.format(
                 source_note_title=source_note_title,
+                note_mention_line=note_mention_line,
                 formatted_tasks_list=formatted_tasks_list
             )
     
