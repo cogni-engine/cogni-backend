@@ -5,7 +5,7 @@ from typing import AsyncGenerator, List, Dict, Optional, Protocol, Any
 from collections.abc import Sequence
 
 from app.models.ai_message import AIMessageCreate, MessageRole
-from app.models.notification import Notification
+from app.models.notification import AINotification
 from app.models.task import Task
 from app.infra.supabase.repositories.ai_messages import AIMessageRepository
 from app.infra.supabase.client import get_supabase_client
@@ -36,7 +36,7 @@ async def conversation_stream(
     timer_duration: Optional[int] = None,  # 秒単位に統一
     timer_completed: bool = False,
     notification_triggered: bool = False,
-    notification_context: Optional[Notification] = None,
+    notification_context: Optional[AINotification] = None,
     daily_summary_context: Optional[str] = None,
     is_ai_initiated: bool = False,  # AI起点メッセージフラグ（見た目用）
     task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト

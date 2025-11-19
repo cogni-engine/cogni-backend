@@ -2,10 +2,10 @@
 import logging
 
 from app.infra.supabase.client import get_supabase_client
-from app.infra.supabase.repositories.notifications import NotificationRepository
+from app.infra.supabase.repositories.notifications import AINotificationRepository
 from app.infra.supabase.repositories.threads import ThreadRepository
 from app.infra.supabase.repositories.ai_messages import AIMessageRepository
-from app.models.notification import NotificationUpdate, NotificationStatus
+from app.models.notification import AINotificationUpdate, NotificationStatus
 from app.services.llm.call_llm import LLMService
 from app.services.cogno.conversation.conversation_service import conversation_stream
 from .prompts.notification_prompt import build_daily_summary_prompt
@@ -23,7 +23,7 @@ async def handle_notification_click(notification_id: int, thread_id: int) -> Non
         thread_id: Thread ID to send message to
     """
     supabase_client = get_supabase_client()
-    notification_repo = NotificationRepository(supabase_client)
+    notification_repo = AINotificationRepository(supabase_client)
     
     try:
         # Get notification
@@ -44,8 +44,8 @@ async def handle_notification_click(notification_id: int, thread_id: int) -> Non
             # Just consume the stream - conversation_stream will save the message
             pass
         
-        # Mark notification as resolved
-        update = NotificationUpdate(status=NotificationStatus.RESOLVED)
+        # Mark AI notification as resolved
+        update = AINotificationUpdate(status=NotificationStatus.RESOLVED)
         await notification_repo.update(notification_id, update)
         
         logger.info(f"Notification {notification_id} marked as resolved")
@@ -67,7 +67,7 @@ async def daily_notification_check(workspace_id: int) -> None:
     supabase_client = get_supabase_client()
     thread_repo = ThreadRepository(supabase_client)
     ai_message_repo = AIMessageRepository(supabase_client)
-    notification_repo = NotificationRepository(supabase_client)
+    notification_repo = AINotificationRepository(supabase_client)
     
     try:
         logger.info(f"Starting daily notification check for workspace {workspace_id}")

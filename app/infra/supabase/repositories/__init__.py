@@ -3,7 +3,7 @@ from supabase import Client  # type: ignore
 
 from .ai_messages import AIMessageRepository
 from .notes import NoteRepository
-from .notifications import NotificationRepository
+from .notifications import AINotificationRepository
 from .tasks import TaskRepository
 from .threads import ThreadRepository
 from .workspaces import WorkspaceMemberRepository, WorkspaceRepository
@@ -18,7 +18,7 @@ class RepositoryFactory:
         self._notes: NoteRepository
         self._threads: ThreadRepository
         self._ai_messages: AIMessageRepository
-        self._notifications: NotificationRepository
+        self._notifications: AINotificationRepository
         self._workspaces: WorkspaceRepository
         self._workspace_members: WorkspaceMemberRepository
         
@@ -52,10 +52,10 @@ class RepositoryFactory:
         return self._ai_messages
     
     @property
-    def notifications(self) -> NotificationRepository:
-        """Get notifications repository"""
+    def notifications(self) -> AINotificationRepository:
+        """Get AI notifications repository"""
         if self._notifications is None:
-            self._notifications = NotificationRepository(self._client)
+            self._notifications = AINotificationRepository(self._client)
         return self._notifications
     
     @property
@@ -80,7 +80,7 @@ __all__ = [
     'NoteRepository',
     'ThreadRepository',
     'AIMessageRepository',
-    'NotificationRepository',
+    'AINotificationRepository',
     'WorkspaceRepository',
     'WorkspaceMemberRepository',
 ]

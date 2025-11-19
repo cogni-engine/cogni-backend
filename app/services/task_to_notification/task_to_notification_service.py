@@ -5,9 +5,9 @@ import logging
 from langchain_openai import ChatOpenAI
 
 from app.config import supabase
-from app.infra.supabase.repositories.notifications import NotificationRepository
+from app.infra.supabase.repositories.notifications import AINotificationRepository
 from app.models.task import Task
-from app.models.notification import Notification, NotificationCreate, NotificationStatus
+from app.models.notification import AINotification, AINotificationCreate, NotificationStatus
 from app.utils.datetime_helper import get_current_datetime_ja
 from .models import NotificationListResponse
 from .prompts import prompt_template, batch_prompt_template
@@ -20,7 +20,7 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 structured_llm = llm.with_structured_output(NotificationListResponse)
 
 
-async def generate_notifications_from_task(task: Task) -> List[Notification]:
+async def generate_notifications_from_task(task: Task) -> List[AINotification]:
     """
     特定のTaskからAIで通知を生成してデータベースに保存する
     既存の同じtask_idから生成された通知は削除される
@@ -32,7 +32,7 @@ async def generate_notifications_from_task(task: Task) -> List[Notification]:
         保存された通知のリスト
     """
     # 既存の同じtask_idから生成された通知を削除
-    notification_repo = NotificationRepository(supabase)
+    notification_repo = AINotificationRepository(supabase)
     deleted_count = await notification_repo.delete_by_task(task.id)
     if deleted_count > 0:
         logger.info(f"Deleted {deleted_count} existing notifications from task {task.id}")
@@ -76,7 +76,7 @@ async def generate_notifications_from_task(task: Task) -> List[Notification]:
         full_content = notif.content + suggestions_text
         
         notifications_to_create.append(
-            NotificationCreate(
+            AINotificationCreate(
                 title=notif.title,
                 content=full_content,
                 due_date=notif.due_date,
@@ -86,8 +86,8 @@ async def generate_notifications_from_task(task: Task) -> List[Notification]:
             )
         )
     
-    # NotificationRepositoryで通知を保存（既に上で初期化済み）
-    saved_notifications: List[Notification] = []
+    # AINotificationRepositoryで通知を保存（既に上で初期化済み）
+    saved_notifications: List[AINotification] = []
     
     for notification_create in notifications_to_create:
         try:
@@ -102,7 +102,7 @@ async def generate_notifications_from_task(task: Task) -> List[Notification]:
     return saved_notifications
 
 
-async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Notification]:
+async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AINotification]:
     """
     複数のTaskからAIで通知を一括生成してデータベースに保存する
     
@@ -116,7 +116,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
         return []
     
     # 既存の通知を一括削除
-    notification_repo = NotificationRepository(supabase)
+    notification_repo = AINotificationRepository(supabase)
     task_ids = [task.id for task in tasks]
     deleted_count = await notification_repo.delete_by_tasks(task_ids)
     if deleted_count > 0:
@@ -153,7 +153,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
         return []
     
     # 通知を保存（各タスクのuser_idごとに保存）
-    saved_notifications: List[Notification] = []
+    saved_notifications: List[AINotification] = []
     
     # 各タスクのuser_idを取得（重複を除く）
     user_ids = list(set(task.user_id for task in tasks))
@@ -173,7 +173,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[Not
             primary_task = user_tasks[0]
         
         try:
-            notification_create = NotificationCreate(
+            notification_create = AINotificationCreate(
                 title=notif.title,
                 content=full_content,
                 due_date=notif.due_date,

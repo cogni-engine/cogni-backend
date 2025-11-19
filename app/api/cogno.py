@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
 
-from app.infra.supabase.repositories.notifications import NotificationRepository
+from app.infra.supabase.repositories.notifications import AINotificationRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
 from app.infra.supabase.client import get_supabase_client
 from app.services.cogno.cogni_engine.engine_service import make_engine_decision, extract_timer_duration, _convert_tasks_to_simple_dict
@@ -74,7 +74,7 @@ async def stream_conversation(
     # Handle notification trigger
     if request.notification_id:
         supabase_client = get_supabase_client()
-        notification_repo = NotificationRepository(supabase_client)
+        notification_repo = AINotificationRepository(supabase_client)
         notification = await notification_repo.find_by_id(request.notification_id)
         
         if notification:

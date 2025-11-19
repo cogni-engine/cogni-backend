@@ -3,7 +3,7 @@ from .task import Task, TaskCreate, TaskUpdate, TaskUpdateRequest, TaskUpdateRes
 from .note import Note, NoteCreate, NoteUpdate
 from .thread import Thread, ThreadCreate, ThreadUpdate
 from .ai_message import AIMessage, AIMessageCreate, AIMessageUpdate, MessageFile, MessageRole
-from .notification import Notification, NotificationCreate, NotificationUpdate, NotificationAnalysisRequest, NotificationAnalysisResponse, NotificationStatus, NotificationCreateRequest, NotificationUpdateStatusRequest
+from .notification import AINotification, AINotificationCreate, AINotificationUpdate, NotificationAnalysisRequest, NotificationAnalysisResponse, NotificationStatus, NotificationCreateRequest, NotificationUpdateStatusRequest
 from .workspace import Workspace, WorkspaceCreate, WorkspaceUpdate, WorkspaceMember, WorkspaceMemberCreate, WorkspaceMemberUpdate
 from .user import UserProfile, UserProfileCreate, UserProfileUpdate
 from .chat import ChatRequest, ChatResponse, ChatMessage
@@ -13,7 +13,7 @@ __all__ = [
     'Note', 'NoteCreate', 'NoteUpdate',
     'Thread', 'ThreadCreate', 'ThreadUpdate',
     'AIMessage', 'AIMessageCreate', 'AIMessageUpdate', 'MessageFile', 'MessageRole',
-    'Notification', 'NotificationCreate', 'NotificationUpdate',
+    'AINotification', 'AINotificationCreate', 'AINotificationUpdate',
     'NotificationAnalysisRequest', 'NotificationAnalysisResponse',
     'NotificationStatus', 'NotificationCreateRequest', 'NotificationUpdateStatusRequest',
     'Workspace', 'WorkspaceCreate', 'WorkspaceUpdate',

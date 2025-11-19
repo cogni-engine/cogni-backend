@@ -2,7 +2,7 @@
 from typing import Optional, List, Dict
 import json
 from app.models.task import Task
-from app.models.notification import Notification
+from app.models.notification import AINotification
 from app.utils.datetime_helper import get_current_datetime_ja, format_datetime_ja
 
 
@@ -235,7 +235,7 @@ def build_conversation_prompt(
     timer_duration: Optional[int] = None,  # 秒単位に統一
     timer_completed: bool = False,
     notification_triggered: bool = False,
-    notification_context: Optional[Notification] = None,
+    notification_context: Optional[AINotification] = None,
     daily_summary_context: Optional[str] = None,
     task_list_for_suggestion: Optional[List[Dict]] = None,  # Focused Task=Noneの場合のタスクリスト
     task_to_complete: Optional[Task] = None,  # 完了確認対象タスク

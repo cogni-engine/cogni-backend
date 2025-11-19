@@ -1,15 +1,15 @@
 """Prompts for notification summarization"""
 from typing import List
-from app.models.notification import Notification
+from app.models.notification import AINotification
 from app.utils.datetime_helper import get_current_datetime_ja
 
 
-def build_daily_summary_prompt(notifications: List[Notification]) -> str:
+def build_daily_summary_prompt(notifications: List[AINotification]) -> str:
     """
-    Build prompt for LLM to summarize notifications into important items to tell user.
+    Build prompt for LLM to summarize AI notifications into important items to tell user.
     
     Args:
-        notifications: List of notifications with status sent/scheduled
+        notifications: List of AI notifications with status sent/scheduled
         
     Returns:
         Prompt string for LLM

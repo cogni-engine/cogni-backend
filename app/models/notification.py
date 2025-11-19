@@ -29,8 +29,8 @@ class NotificationAnalysisResponse(BaseModel):
     updates: List[Dict[str, Any]]
     summary: str
 
-class NotificationBase(BaseModel):
-    """Base notification fields"""
+class AINotificationBase(BaseModel):
+    """Base AI notification fields"""
     title: str
     content: str
     due_date: datetime
@@ -39,21 +39,21 @@ class NotificationBase(BaseModel):
     status: NotificationStatus = NotificationStatus.SCHEDULED
 
 
-class NotificationCreate(NotificationBase):
-    """Notification creation model"""
+class AINotificationCreate(AINotificationBase):
+    """AI notification creation model"""
     pass
 
 
-class NotificationUpdate(BaseModel):
-    """Notification update model - all fields optional"""
+class AINotificationUpdate(BaseModel):
+    """AI notification update model - all fields optional"""
     title: Optional[str] = None
     content: Optional[str] = None
     due_date: Optional[datetime] = None
     status: Optional[NotificationStatus] = None
 
 
-class Notification(NotificationBase):
-    """Complete notification model from database"""
+class AINotification(AINotificationBase):
+    """Complete AI notification model from database"""
     id: int
     created_at: datetime
     updated_at: datetime

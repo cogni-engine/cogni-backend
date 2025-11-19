@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List
 
 from app.config import supabase
-from app.models import Notification
+from app.models import AINotification
 from app.services.task_to_notification import generate_notifications_from_task as generate_notifications_from_task_ai
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -14,7 +14,7 @@ class GenerateNotificationsRequest(BaseModel):
 
 
 class GenerateNotificationsResponse(BaseModel):
-    notifications: List[Notification]
+    notifications: List[AINotification]
     count: int
 
 
