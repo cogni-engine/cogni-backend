@@ -16,6 +16,7 @@ uvicorn = { extras = ["standard"], version = "*" }
 supabase = "*"
 python-dotenv = "*"
 pydantic = "^2.0"
+httpx = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
