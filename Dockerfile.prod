@@ -55,6 +55,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Production command - uses multiple workers for better performance
 # Adjust --workers based on your Render plan (2*CPU cores + 1 is recommended)
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --http h11
+
 
 
