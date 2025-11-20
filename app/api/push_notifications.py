@@ -4,12 +4,11 @@ Push Notification API Endpoints
 Handles push notification webhook from Supabase
 """
 
-from fastapi import APIRouter, HTTPException, Header, Depends
-from typing import Optional
+from fastapi import APIRouter, HTTPException
 from datetime import datetime
 import logging
 
-from app.config import supabase, SUPABASE_SERVICE_ROLE_KEY
+from app.config import supabase
 from app.models.push_notification import (
     SendPushNotificationResponse,
     SupabaseWebhookPayload,
@@ -24,24 +23,6 @@ router = APIRouter(prefix="/api/push-notifications", tags=["push-notifications"]
 push_service = PushNotificationService(supabase)
 
 
-async def verify_authorization(authorization: Optional[str] = Header(None)):
-    """Verify request is authorized with service role key"""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing authorization header")
-
-    # Check if it's a Bearer token
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
-
-    token = authorization.replace("Bearer ", "")
-
-    # Verify it matches service role key
-    if token != SUPABASE_SERVICE_ROLE_KEY:
-        raise HTTPException(status_code=401, detail="Invalid authorization token")
-
-    return token
-
-
 @router.get("/health")
 async def health_check():
     """Health check for push notification service"""
@@ -53,9 +34,7 @@ async def health_check():
 
 
 @router.post("/send", response_model=SendPushNotificationResponse)
-async def send_push_notification(
-    request: SupabaseWebhookPayload, _: str = Depends(verify_authorization)
-):
+async def send_push_notification(request: SupabaseWebhookPayload):
     """
     Send push notification via Expo Push API
 
@@ -64,7 +43,6 @@ async def send_push_notification(
 
     Args:
         request: SupabaseWebhookPayload with the inserted record
-        _: Authorization token (verified by dependency)
 
     Returns:
         SendPushNotificationResponse with send results
