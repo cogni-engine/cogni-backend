@@ -58,6 +58,7 @@ class PushNotificationService:
                     "success": True,
                     "sent": 0,
                     "failed": 0,
+                    "tickets": [],
                 }
 
             # Fetch push tokens for the user
@@ -81,6 +82,7 @@ class PushNotificationService:
                     "success": False,
                     "sent": 0,
                     "failed": 0,
+                    "tickets": [],
                 }
 
             # Build Expo push messages

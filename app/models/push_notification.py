@@ -109,5 +109,6 @@ class SendPushNotificationResponse(BaseModel):
     notificationId: int
     sent: int
     failed: int
-    tickets: list
+    tickets: Optional[list] = None
+    message: Optional[str] = None
 
