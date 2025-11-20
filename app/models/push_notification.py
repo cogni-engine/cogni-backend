@@ -62,6 +62,28 @@ class SendNotificationRequest(BaseModel):
     notificationId: int
 
 
+class SupabaseWebhookRecord(BaseModel):
+    """Push notification record from Supabase webhook"""
+    id: int
+    user_id: str
+    title: str
+    body: str
+    data: Optional[Dict[str, Any]] = None
+    status: str
+    sent_at: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: str
+
+
+class SupabaseWebhookPayload(BaseModel):
+    """Supabase INSERT webhook payload"""
+    type: str  # 'INSERT'
+    table: str
+    schema: str
+    record: SupabaseWebhookRecord
+    old_record: Optional[Dict[str, Any]] = None
+
+
 class ExpoPushMessage(BaseModel):
     """Expo push notification message format"""
     to: str

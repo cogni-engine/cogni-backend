@@ -11,8 +11,8 @@ import logging
 
 from app.config import supabase, SUPABASE_SERVICE_ROLE_KEY
 from app.models.push_notification import (
-    SendNotificationRequest,
     SendPushNotificationResponse,
+    SupabaseWebhookPayload,
 )
 from app.services.push_notification_service import PushNotificationService
 
@@ -54,7 +54,7 @@ async def health_check():
 
 @router.post("/send", response_model=SendPushNotificationResponse)
 async def send_push_notification(
-    request: SendNotificationRequest, _: str = Depends(verify_authorization)
+    request: SupabaseWebhookPayload, _: str = Depends(verify_authorization)
 ):
     """
     Send push notification via Expo Push API
@@ -63,7 +63,7 @@ async def send_push_notification(
     push_notification record is inserted.
 
     Args:
-        request: SendNotificationRequest with notificationId
+        request: SupabaseWebhookPayload with the inserted record
         _: Authorization token (verified by dependency)
 
     Returns:
@@ -72,10 +72,11 @@ async def send_push_notification(
     Raises:
         HTTPException: If notification not found or send fails
     """
-    notification_id = request.notificationId
+    # Extract notification ID from the webhook payload
+    notification_id = request.record.id
 
     try:
-        logger.info(f"Processing push notification {notification_id}")
+        logger.info(f"Processing push notification {notification_id} from webhook")
         result = await push_service.send_notification(notification_id)
         logger.info(
             f"Push notification {notification_id} processed: "
