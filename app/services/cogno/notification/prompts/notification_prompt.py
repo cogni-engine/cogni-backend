@@ -20,7 +20,8 @@ def build_daily_summary_prompt(notifications: List[AINotification]) -> str:
     for notif in notifications:
         notification_list.append({
             "title": notif.title,
-            "content": notif.content,
+            "ai_context": notif.ai_context,
+            "body": notif.body,
             "due_date": notif.due_date.isoformat(),
             "status": notif.status
         })

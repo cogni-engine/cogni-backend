@@ -68,17 +68,17 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
         return []
     
     # NotificationCreateモデルに変換
-    # suggestionsをcontentに統合
+    # suggestionsをbodyに格納
     notifications_to_create = []
     for notif in result.notifications:
-        # suggestionsをcontentに追加
-        suggestions_text = "\n\n【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
-        full_content = notif.content + suggestions_text
+        # suggestionsをbodyフィールドに追加
+        suggestions_text = "【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
         
         notifications_to_create.append(
             AINotificationCreate(
                 title=notif.title,
-                content=full_content,
+                ai_context=notif.ai_context,
+                body=suggestions_text,
                 due_date=notif.due_date,
                 task_id=task.id,
                 user_id=task.user_id,
@@ -159,8 +159,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
     user_ids = list(set(task.user_id for task in tasks))
     
     for notif in result.notifications:
-        suggestions_text = "\n\n【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
-        full_content = notif.content + suggestions_text
+        suggestions_text = "【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
         
         # 各ユーザーごとに通知を保存
         for user_id in user_ids:
@@ -172,20 +171,21 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
             # 最初のタスクに紐づける
             primary_task = user_tasks[0]
         
-        try:
-            notification_create = AINotificationCreate(
-                title=notif.title,
-                content=full_content,
-                due_date=notif.due_date,
-                task_id=primary_task.id,
+            try:
+                notification_create = AINotificationCreate(
+                    title=notif.title,
+                    ai_context=notif.ai_context,
+                    body=suggestions_text,
+                    due_date=notif.due_date,
+                    task_id=primary_task.id,
                     user_id=user_id,
-                status=NotificationStatus.SCHEDULED
-            )
-            saved_notification = await notification_repo.create(notification_create)
-            saved_notifications.append(saved_notification)
-            logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
-        except Exception as e:
-            logger.error(f"Failed to save notification for user {user_id}: {e}")
-            continue
+                    status=NotificationStatus.SCHEDULED
+                )
+                saved_notification = await notification_repo.create(notification_create)
+                saved_notifications.append(saved_notification)
+                logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
+            except Exception as e:
+                logger.error(f"Failed to save notification for user {user_id}: {e}")
+                continue
     
     return saved_notifications
