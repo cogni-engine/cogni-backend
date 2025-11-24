@@ -68,17 +68,13 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
         return []
     
     # NotificationCreateモデルに変換
-    # suggestionsをbodyに格納
     notifications_to_create = []
     for notif in result.notifications:
-        # suggestionsをbodyフィールドに追加
-        suggestions_text = "【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
-        
         notifications_to_create.append(
             AINotificationCreate(
                 title=notif.title,
                 ai_context=notif.ai_context,
-                body=suggestions_text,
+                body=notif.body,
                 due_date=notif.due_date,
                 task_id=task.id,
                 user_id=task.user_id,
@@ -159,8 +155,6 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
     user_ids = list(set(task.user_id for task in tasks))
     
     for notif in result.notifications:
-        suggestions_text = "【行動提案】\n" + "\n".join([f"• {s}" for s in notif.suggestions])
-        
         # 各ユーザーごとに通知を保存
         for user_id in user_ids:
             # そのユーザーのタスクを取得
@@ -175,7 +169,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
                 notification_create = AINotificationCreate(
                     title=notif.title,
                     ai_context=notif.ai_context,
-                    body=suggestions_text,
+                    body=notif.body,
                     due_date=notif.due_date,
                     task_id=primary_task.id,
                     user_id=user_id,
