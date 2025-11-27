@@ -67,6 +67,11 @@ class PaymentService:
             if event_type == "checkout.session.completed":
                 await self.handle_checkout_session_completed(event_data)
             
+            elif event_type == "customer.subscription.created":
+                # subscription.created fires on first checkout
+                # Treat it the same as subscription.updated
+                await self.handle_subscription_updated(event_data)
+            
             elif event_type == "customer.subscription.updated":
                 await self.handle_subscription_updated(event_data)
             
@@ -163,9 +168,10 @@ class PaymentService:
     
     async def handle_subscription_updated(self, subscription: dict) -> None:
         """
-        Handle customer.subscription.updated - MASTER EVENT
+        Handle customer.subscription.updated and customer.subscription.created - MASTER EVENT
         
         This is the master event for subscription changes:
+        - Initial subscription creation (subscription.created)
         - Plan changes
         - Seat/quantity changes
         - Cancellation scheduled
@@ -175,7 +181,7 @@ class PaymentService:
         """
         subscription_id = subscription.get('id', 'unknown')
         print(f"\n{'─'*60}")
-        print(f"📝 Processing customer.subscription.updated (MASTER EVENT)")
+        print(f"📝 Processing customer.subscription.updated/created (MASTER EVENT)")
         print(f"   Subscription ID: {subscription_id}")
         print(f"{'─'*60}")
         
@@ -235,12 +241,37 @@ class PaymentService:
         plan_type = self._get_plan_type_from_price_id(price_id)
         print(f"   Plan Type: {plan_type.value}")
         
+        # Check both cancel_at_period_end (old API) and cancel_at (new API)
         cancel_at_period_end = subscription.get("cancel_at_period_end")
+        cancel_at = subscription.get("cancel_at")  # Unix timestamp for scheduled cancellation
+        
+        # Stripe uses cancel_at for Customer Portal cancellations
+        # If cancel_at is set, treat it as cancel_at_period_end=True
+        if cancel_at is not None:
+            print(f"   Cancel At: {cancel_at} (scheduled cancellation detected)")
+            cancel_at_period_end = True  # Override to True
+        
         print(f"   Cancel at Period End: {cancel_at_period_end}")
         
-        # Note: Do NOT update current_period_end here
-        # That's handled by invoice.payment_succeeded for renewals
-        print(f"   ℹ️  Not updating current_period_end (handled by invoice.payment_succeeded)")
+        # Extract current_period_end from subscription
+        # Try subscription level first, then fall back to item level
+        current_period_end = None
+        
+        # Method 1: From subscription object directly
+        if subscription.get("current_period_end"):
+            current_period_end = datetime.fromtimestamp(
+                subscription["current_period_end"], tz=timezone.utc
+            )
+            print(f"   Current Period End: {current_period_end} (from subscription)")
+        # Method 2: From subscription items
+        elif subscription.get("items", {}).get("data") and len(subscription["items"]["data"]) > 0:
+            item_period_end = subscription["items"]["data"][0].get("current_period_end")
+            if item_period_end:
+                current_period_end = datetime.fromtimestamp(item_period_end, tz=timezone.utc)
+                print(f"   Current Period End: {current_period_end} (from item)")
+        
+        if not current_period_end:
+            print(f"   ⚠️  No current_period_end found in subscription or items")
         
         print(f"   📝 Updating organization...")
         update_data = OrganizationUpdate(
@@ -248,8 +279,8 @@ class PaymentService:
             stripe_subscription_item_id=subscription_item_id,
             seat_count=seat_count,
             plan_type=plan_type,
-            cancel_at_period_end=cancel_at_period_end
-            # current_period_end is NOT updated here
+            cancel_at_period_end=cancel_at_period_end,
+            current_period_end=current_period_end  # Set from subscription
         )
         
         updated_org = await self.org_repo.update(org.id, update_data)
@@ -259,6 +290,7 @@ class PaymentService:
             print(f"      - Seat Count: {updated_org.seat_count}")
             print(f"      - Plan Type: {updated_org.plan_type.value}")
             print(f"      - Cancel at Period End: {updated_org.cancel_at_period_end}")
+            print(f"      - Current Period End: {updated_org.current_period_end}")
             logger.info(f"PaymentService: Updated organization {org.id} subscription details")
         else:
             print(f"   ❌ Failed to update organization")

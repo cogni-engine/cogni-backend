@@ -100,6 +100,21 @@ poetry install
 Copy the example environment file and fill in your values:
 ```bash
 cp .env.example .env
+# Supabase
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# OpenAI
+OPENAI_API_KEY=your-openai-api-key
+
+# Frontend URL (for CORS and Stripe redirects)
+CLIENT_URL=http://localhost:3000
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_xxxxx
+STRIPE_WEBHOOK_SECRET=whsec_xxxxx
+STRIPE_PRICE_ID_PRO=price_xxxxx
+STRIPE_PRICE_ID_BUSINESS=price_xxxxx
 ```
 
 Then edit `.env` and fill in your actual values:
@@ -172,7 +187,27 @@ completed = await task_repo.mark_completed(task.id)
 
 ## API Endpoints
 
-All endpoints are prefixed with `/api`.
+### Billing
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/billing/pro/purchase` | Create Pro plan checkout session |
+
+### Stripe Webhooks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/stripe/webhook` | Handle Stripe webhook events |
+
+### Tasks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/tasks` | List all tasks |
+| GET | `/tasks/{task_id}` | Get task by ID |
+| POST | `/tasks` | Create new task |
+| PUT | `/tasks/{task_id}` | Update task |
+| DELETE | `/tasks/{task_id}` | Delete task |
+| POST | `/tasks/{task_id}/complete` | Mark task complete |
+| GET | `/tasks/user/{user_id}/pending` | Get pending tasks |
+| GET | `/tasks/user/{user_id}/overdue` | Get overdue tasks |
 
 ### Cogno AI (`/api/cogno`)
 | Method | Endpoint | Description |
