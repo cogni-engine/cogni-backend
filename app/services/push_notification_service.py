@@ -89,6 +89,7 @@ class PushNotificationService:
             messages = [
                 {
                     "to": token["expo_push_token"],
+                    "badge": 13,
                     "title": notification["title"],
                     "body": notification["body"],
                     "data": notification.get("data", {}),
