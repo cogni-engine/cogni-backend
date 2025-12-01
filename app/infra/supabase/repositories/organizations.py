@@ -29,3 +29,4 @@ class OrganizationRepository(BaseRepository[Organization, OrganizationCreate, Or
         return results[0] if results else None
 
 
+
