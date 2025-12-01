@@ -1,19 +1,17 @@
 """Billing API endpoints for subscription management"""
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, ConfigDict
 import stripe
 
 from app.config import (
     supabase,
     STRIPE_SECRET_KEY,
-    STRIPE_PRICE_ID_PRO,
-    STRIPE_PRICE_ID_BUSINESS,
     CLIENT_URL,
 )
 from app.auth import get_current_user_id
 from app.infra.supabase.repositories.organizations import OrganizationRepository
-from app.models.organization import OrganizationUpdate
+from app.services.payment import BillingService
 
 logger = logging.getLogger(__name__)
 
@@ -83,114 +81,45 @@ async def upgrade_to_business(
     
     logger.info(f"Processing Business upgrade for organization {req.organization_id}")
     
-    # Initialize repository
+    # Initialize services
     org_repo = OrganizationRepository(supabase)
+    billing_service = BillingService(org_repo, supabase)
     
-    # Get organization
-    org = await org_repo.find_by_id(req.organization_id)
-    if not org:
-        print(f"❌ Organization not found: {req.organization_id}")
-        logger.error(f"Organization not found: {req.organization_id}")
-        raise HTTPException(status_code=404, detail="Organization not found")
-    
+    # Authorization & validation using single-responsibility methods
+    org = await billing_service.get_organization_or_404(req.organization_id)
     print(f"✅ Organization: {org.name}")
     
-    # Verify user is a member and has owner/admin role
-    print("🔍 Verifying user authorization...")
-    member_check = supabase.table('organization_members') \
-        .select('role_id') \
-        .eq('organization_id', req.organization_id) \
-        .eq('user_id', user_id) \
-        .eq('status', 'active') \
-        .single() \
-        .execute()
+    await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
+    print(f"✅ User authorized")
     
-    if not member_check.data:
-        print(f"❌ User is not a member of organization {req.organization_id}")
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this organization"
-        )
+    billing_service.validate_plan_type(
+        org, "pro", 
+        f"Can only upgrade from Pro plan. Current plan: {org.plan_type}"
+    )
+    billing_service.validate_subscription_exists(org)
+    billing_service.validate_seat_count(org, req.seat_count)
     
-    # Check if user is owner/admin (role_id 1 or 2)
-    role_id = member_check.data.get('role_id')
-    if role_id not in [1, 2]:
-        print(f"❌ User is not owner/admin (role_id={role_id})")
-        raise HTTPException(
-            status_code=403,
-            detail="Only organization owners/admins can upgrade plans"
-        )
+    # Get Business plan price ID
+    price_id = billing_service.get_price_id("business")
     
-    print(f"✅ User authorized (role_id={role_id})")
+    # Update Stripe subscription (validated to exist by validate_subscription_exists)
+    assert org.stripe_subscription_id is not None
+    assert org.stripe_subscription_item_id is not None
+    billing_service.modify_subscription(
+        subscription_id=org.stripe_subscription_id,
+        subscription_item_id=org.stripe_subscription_item_id,
+        price_id=price_id,
+        quantity=req.seat_count
+    )
     
-    # Validate current plan
-    if org.plan_type != "pro":
-        print(f"❌ Organization is not on Pro plan: {org.plan_type}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Can only upgrade from Pro plan. Current plan: {org.plan_type}"
-        )
+    logger.info(f"Successfully upgraded organization {org.id} to Business plan")
     
-    # Validate has subscription
-    if not org.stripe_subscription_id or not org.stripe_subscription_item_id:
-        print(f"❌ No active subscription found")
-        raise HTTPException(
-            status_code=400,
-            detail="No active Pro subscription found"
-        )
-    
-    # Validate seat count
-    # Seat count must be >= active members
-    seat_count = req.seat_count
-    if seat_count < org.active_member_count:
-        print(f"❌ Requested seats ({seat_count}) < active members ({org.active_member_count})")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Seat count must be at least {org.active_member_count} (current member count)"
-        )
-    
-    try:
-        # Update Stripe subscription
-        # This single API call does:
-        # 1. Changes price from PRO to BUSINESS
-        # 2. Updates quantity to active_member_count
-        # 3. Automatically calculates proration
-        updated_subscription = stripe.Subscription.modify(
-            org.stripe_subscription_id,
-            items=[
-                {
-                    "id": org.stripe_subscription_item_id,
-                    "price": STRIPE_PRICE_ID_BUSINESS,
-                    "quantity": seat_count,
-                }
-            ],
-            proration_behavior="create_prorations",  # Create proration invoice
-        )
-        
-        
-        logger.info(f"Successfully upgraded organization {org.id} to Business plan")
-        
-        return UpgradeToBusinessResponse(
-            success=True,
-            message=f"Successfully upgraded to Business plan with {seat_count} seats",
-            new_plan="business",
-            seat_count=seat_count
-        )
-        
-    except stripe.error.StripeError as e:
-        print(f"❌ Stripe upgrade failed: {e}")
-        logger.error(f"Stripe upgrade failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to upgrade subscription: {str(e)}"
-        )
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        logger.error(f"Unexpected error in upgrade_to_business: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error"
-        )
+    return UpgradeToBusinessResponse(
+        success=True,
+        message=f"Successfully upgraded to Business plan with {req.seat_count} seats",
+        new_plan="business",
+        seat_count=req.seat_count
+    )
 
 
 @router.post("/update-seats", response_model=UpdateSeatsResponse)
@@ -217,69 +146,23 @@ async def update_subscription_seats(
     
     logger.info(f"Manual seat update for organization {req.organization_id} to {req.seat_count} seats")
     
-    # Initialize repository
+    # Initialize services
     org_repo = OrganizationRepository(supabase)
+    billing_service = BillingService(org_repo, supabase)
     
-    # Get organization
-    org = await org_repo.find_by_id(req.organization_id)
-    if not org:
-        print(f"❌ Organization not found: {req.organization_id}")
-        raise HTTPException(status_code=404, detail="Organization not found")
-    
+    # Authorization & validation using single-responsibility methods
+    org = await billing_service.get_organization_or_404(req.organization_id)
     print(f"✅ Organization: {org.name}")
     
-    # Verify user is a member and has owner/admin role
-    print("🔍 Verifying user authorization...")
-    member_check = supabase.table('organization_members') \
-        .select('role_id') \
-        .eq('organization_id', req.organization_id) \
-        .eq('user_id', user_id) \
-        .eq('status', 'active') \
-        .single() \
-        .execute()
+    await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
+    print(f"✅ User authorized")
     
-    if not member_check.data:
-        print(f"❌ User is not a member of organization {req.organization_id}")
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this organization"
-        )
-    
-    # Check if user is owner/admin (role_id 1 or 2)
-    role_id = member_check.data.get('role_id')
-    if role_id not in [1, 2]:
-        print(f"❌ User is not owner/admin (role_id={role_id})")
-        raise HTTPException(
-            status_code=403,
-            detail="Only organization owners/admins can update seats"
-        )
-    
-    print(f"✅ User authorized (role_id={role_id})")
-    
-    
-    # Only for Business plan
-    if org.plan_type != "business":
-        print(f"❌ Not a Business plan: {org.plan_type}")
-        raise HTTPException(
-            status_code=400,
-            detail="Seat updates are only available for Business plan"
-        )
-    
-    # Validate has subscription
-    if not org.stripe_subscription_id or not org.stripe_subscription_item_id:
-        print(f"❌ No active subscription found")
-        raise HTTPException(
-            status_code=400,
-            detail="No active subscription found"
-        )
-    
-    # Validate: seat count must be >= active members
-    if req.seat_count < org.active_member_count:
-        print(f"❌ Requested seats ({req.seat_count}) < active members ({org.active_member_count})")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot reduce seats below active member count ({org.active_member_count})"
-        )
+    billing_service.validate_plan_type(
+        org, "business",
+        "Seat updates are only available for Business plan"
+    )
+    billing_service.validate_subscription_exists(org)
+    billing_service.validate_seat_count(org, req.seat_count)
     
     # Check if update is needed
     if req.seat_count == org.seat_count:
@@ -292,45 +175,25 @@ async def update_subscription_seats(
         )
     
     old_seat_count = org.seat_count
-    
     print(f"📝 Updating Stripe seats: {old_seat_count} → {req.seat_count}")
     
-    try:
-        # Update Stripe subscription quantity
-        updated_subscription = stripe.Subscription.modify(
-            org.stripe_subscription_id,
-            items=[
-                {
-                    "id": org.stripe_subscription_item_id,
-                    "quantity": req.seat_count,
-                }
-            ],
-            proration_behavior="create_prorations",  # Pro-rate the change
-        )
-        
-        logger.info(f"Updated seats for organization {req.organization_id}: {old_seat_count} → {req.seat_count}")
-        
-        return UpdateSeatsResponse(
-            success=True,
-            message=f"Seats updated from {old_seat_count} to {req.seat_count}",
-            old_seat_count=old_seat_count,
-            new_seat_count=req.seat_count
-        )
-        
-    except stripe.error.StripeError as e:
-        print(f"❌ Stripe update failed: {e}")
-        logger.error(f"Failed to update Stripe seats for organization {req.organization_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update seats: {str(e)}"
-        )
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        logger.error(f"Unexpected error updating seats for organization {req.organization_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error"
-        )
+    # Update Stripe subscription quantity (validated to exist by validate_subscription_exists)
+    assert org.stripe_subscription_id is not None
+    assert org.stripe_subscription_item_id is not None
+    billing_service.modify_subscription(
+        subscription_id=org.stripe_subscription_id,
+        subscription_item_id=org.stripe_subscription_item_id,
+        quantity=req.seat_count
+    )
+    
+    logger.info(f"Updated seats for organization {req.organization_id}: {old_seat_count} → {req.seat_count}")
+    
+    return UpdateSeatsResponse(
+        success=True,
+        message=f"Seats updated from {old_seat_count} to {req.seat_count}",
+        old_seat_count=old_seat_count,
+        new_seat_count=req.seat_count
+    )
 
 
 # ============================================================================
@@ -387,142 +250,60 @@ async def purchase_plan(
     
     logger.info(f"Processing {req.plan_id} plan purchase for user {user_id}")
     
-    # Validate plan_id
-    if req.plan_id not in ["pro", "business"]:
-        raise HTTPException(status_code=400, detail=f"Invalid plan_id: {req.plan_id}")
-    
-    # Get price ID
-    price_id = STRIPE_PRICE_ID_PRO if req.plan_id == "pro" else STRIPE_PRICE_ID_BUSINESS
-    if not price_id:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Stripe price ID for {req.plan_id} plan is not configured"
-        )
-    
-    # Initialize repository
+    # Initialize services
     org_repo = OrganizationRepository(supabase)
+    billing_service = BillingService(org_repo, supabase)
     
-    # Get organization
-    org = await org_repo.find_by_id(req.organization_id)
-    if not org:
-        print(f"❌ Organization not found: {req.organization_id}")
-        raise HTTPException(status_code=404, detail="Organization not found")
+    # Validate plan_id and get price
+    price_id = billing_service.get_price_id(req.plan_id)
     
+    # Authorization & validation using single-responsibility methods
+    org = await billing_service.get_organization_or_404(req.organization_id)
     print(f"✅ Organization found: {org.name}")
     
-    # Verify user is the owner of the organization
-    print("🔍 Verifying user is organization owner...")
-    member_check = supabase.table('organization_members') \
-        .select('role_id') \
-        .eq('organization_id', req.organization_id) \
-        .eq('user_id', user_id) \
-        .eq('status', 'active') \
-        .single() \
-        .execute()
-    
-    if not member_check.data:
-        print(f"❌ User is not a member of organization {req.organization_id}")
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this organization"
-        )
-    
-    role_id = member_check.data.get('role_id')
-    if role_id != 1:  # Must be owner (role_id=1)
-        print(f"❌ User is not owner (role_id={role_id})")
-        raise HTTPException(
-            status_code=403,
-            detail="Only organization owners can purchase plans"
-        )
-    
+    await billing_service.verify_user_is_owner(req.organization_id, user_id)
     print("✅ User verified as organization owner")
     
-    # Check if organization already has an active subscription
-    print("🔍 Checking for existing subscription...")
-    print(f"   Current plan: {org.plan_type}")
-    
-    if org.plan_type in ["pro", "business"]:
-        print(f"❌ Organization already has {org.plan_type} plan")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Organization already has an active {org.plan_type} subscription. Use the upgrade or portal endpoint to modify your subscription."
-        )
-    
+    billing_service.validate_no_active_subscription(org)
     print("✅ No active subscription found - proceeding with purchase")
     
     # Create or get Stripe customer
-    customer_id = org.stripe_customer_id
-    if not customer_id:
-        print("📝 Creating Stripe customer...")
-        try:
-            customer = stripe.Customer.create(
-                metadata={
-                    "organization_id": str(org.id),
-                    "user_id": user_id
-                }
-            )
-            customer_id = customer.id
-            print(f"✅ Stripe customer created: {customer_id}")
-            
-            # Update organization with customer ID
-            await org_repo.update(
-                org.id,
-                OrganizationUpdate(stripe_customer_id=customer_id)
-            )
-            
-        except stripe.error.StripeError as e:
-            logger.error(f"Stripe customer creation failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to create Stripe customer: {str(e)}"
-            )
+    customer_id = await billing_service.ensure_stripe_customer(org, user_id)
     
     # Determine quantity
-    quantity = req.seat_count if req.seat_count else 1
+    quantity = billing_service.calculate_quantity_for_plan(
+        req.plan_id, 
+        req.seat_count, 
+        org
+    )
     
     # Create Checkout Session
     print("📝 Creating Stripe Checkout Session...")
     print(f"   Price ID: {price_id}")
     print(f"   Quantity: {quantity}")
     
-    try:
-        session = stripe.checkout.Session.create(
-            mode="subscription",
-            ui_mode="embedded",
-            customer=customer_id,
-            line_items=[
-                {
-                    "price": price_id,
-                    "quantity": quantity,
-                }
-            ],
-            return_url=f"{CLIENT_URL}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
-            metadata={
-                "organization_id": str(org.id),
-                "plan_type": req.plan_id,
-                "user_id": user_id
-            }
-        )
-        
-        print("✅ Checkout Session created")
-        print(f"   Session ID: {session.id}")
-        print(f"   Client Secret: {session.client_secret[:20]}...")
-        print(f"{'='*60}\n")
-        
-        logger.info(f"Checkout session created for organization {org.id}: {session.id}")
-        
-        return PurchasePlanResponse(
-            client_secret=session.client_secret,
-            session_id=session.id,
-            organization_id=org.id
-        )
-        
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe session creation failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create checkout session: {str(e)}"
-        )
+    session = billing_service.create_checkout_session(
+        customer_id=customer_id,
+        price_id=price_id,
+        quantity=quantity,
+        organization_id=org.id,
+        plan_type=req.plan_id,
+        user_id=user_id,
+        return_url=f"{CLIENT_URL}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
+    )
+    
+    print("✅ Checkout Session created")
+    print(f"   Session ID: {session.id}")
+    print(f"   Client Secret: {session.client_secret[:20]}...")
+    print(f"{'='*60}\n")
+    
+    logger.info(f"Checkout session created for organization {org.id}: {session.id}")
+    
+    return PurchasePlanResponse(
+        client_secret=session.client_secret,
+        session_id=session.id,
+        organization_id=org.id
+    )
 
 
 @router.post("/portal-session", response_model=CreatePortalSessionResponse)
@@ -544,47 +325,18 @@ async def create_portal_session(
     
     logger.info(f"Creating portal session for organization {req.organization_id}")
     
-    # Initialize repository
+    # Initialize services
     org_repo = OrganizationRepository(supabase)
+    billing_service = BillingService(org_repo, supabase)
     
-    # Get organization
-    org = await org_repo.find_by_id(req.organization_id)
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    
+    # Authorization & validation using single-responsibility methods
+    org = await billing_service.get_organization_or_404(req.organization_id)
     print(f"✅ Organization: {org.name}")
     
-    # Verify user is a member of the organization
-    member_check = supabase.table('organization_members') \
-        .select('role_id') \
-        .eq('organization_id', req.organization_id) \
-        .eq('user_id', user_id) \
-        .eq('status', 'active') \
-        .single() \
-        .execute()
+    await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
+    print(f"✅ User is authorized")
     
-    if not member_check.data:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not a member of this organization"
-        )
-    
-    # Check if user is owner/admin (role_id 1 or 2)
-    role_id = member_check.data.get('role_id')
-    if role_id not in [1, 2]:
-        raise HTTPException(
-            status_code=403,
-            detail="Only organization owners/admins can access the customer portal"
-        )
-    
-    print(f"✅ User is authorized (role_id={role_id})")
-    
-    # Check if organization has a Stripe customer ID
-    if not org.stripe_customer_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No Stripe customer found for this organization"
-        )
+    billing_service.validate_customer_exists(org)
     
     # Determine return URL
     return_url = req.return_url if req.return_url else f"{CLIENT_URL}/user/subscription"
@@ -593,25 +345,18 @@ async def create_portal_session(
     print(f"   Customer ID: {org.stripe_customer_id}")
     print(f"   Return URL: {return_url}")
     
-    try:
-        # Create portal session
-        portal_session = stripe.billing_portal.Session.create(
-            customer=org.stripe_customer_id,
-            return_url=return_url
-        )
-        
-        print(f"✅ Portal session created")
-        print(f"   URL: {portal_session.url[:50]}...")
-        print(f"{'='*60}\n")
-        
-        logger.info(f"Portal session created for organization {req.organization_id}")
-        
-        return CreatePortalSessionResponse(url=portal_session.url)
-        
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe portal session creation failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create portal session: {str(e)}"
-        )
+    # Create portal session (validated to exist by validate_customer_exists)
+    assert org.stripe_customer_id is not None
+    portal_session = billing_service.create_portal_session(
+        customer_id=org.stripe_customer_id,
+        return_url=return_url
+    )
+    
+    print(f"✅ Portal session created")
+    print(f"   URL: {portal_session.url[:50]}...")
+    print(f"{'='*60}\n")
+    
+    logger.info(f"Portal session created for organization {req.organization_id}")
+    
+    return CreatePortalSessionResponse(url=portal_session.url)
 
