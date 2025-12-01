@@ -3,17 +3,15 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import List, Optional
 from enum import Enum
 
 from app.config import supabase
+from app.auth import get_current_user_id
 from app.infra.supabase.repositories.organizations import OrganizationRepository
 from app.models.organization import OrganizationUpdate
-import stripe
-
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +86,42 @@ class OrganizationInvitationsListResponse(BaseModel):
     organization_id: int
     total_pending: int
     invitations: List[OrganizationInvitationResponse]
+
+
+# ============================================
+# Organization Member Management Models
+# ============================================
+
+class UpdateMemberRoleRequest(BaseModel):
+    """Request model for updating a member's role"""
+    model_config = ConfigDict(populate_by_name=True)
+    
+    organization_id: int = Field(..., alias="organizationId")
+    member_id: int = Field(..., alias="memberId")  # organization_members.id
+    role_id: int = Field(..., alias="roleId")
+
+
+class UpdateMemberRoleResponse(BaseModel):
+    """Response model for role update"""
+    success: bool
+    message: str
+    member_id: int
+    new_role_id: int
+    new_role_name: Optional[str]
+
+
+class DeleteMemberRequest(BaseModel):
+    """Request model for deleting a member"""
+    model_config = ConfigDict(populate_by_name=True)
+    
+    organization_id: int = Field(..., alias="organizationId")
+    member_id: int = Field(..., alias="memberId")  # organization_members.id
+
+
+class DeleteMemberResponse(BaseModel):
+    """Response model for member deletion"""
+    success: bool
+    message: str
 
 
 @router.get("/{organization_id}/members", response_model=OrganizationMembersResponse)
@@ -208,53 +242,288 @@ async def get_organization_members(organization_id: int):
 
 
 # ============================================
+# Organization Member Management Endpoints
+# ============================================
+
+@router.put("/members/update-role", response_model=UpdateMemberRoleResponse)
+async def update_member_role(
+    req: UpdateMemberRoleRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Update a member's role in the organization
+    
+    Restrictions:
+    - Only owners/admins can update roles
+    - Cannot assign owner role (role_id=1) to members
+    
+    Requires: Owner or Admin role
+    """
+    print(f"\n{'='*60}")
+    print(f"👤 Update Member Role")
+    print(f"   User ID: {user_id}")
+    print(f"   Organization ID: {req.organization_id}")
+    print(f"   Member ID: {req.member_id}")
+    print(f"   New Role ID: {req.role_id}")
+    print(f"{'='*60}")
+    
+    org_repo = OrganizationRepository(supabase)
+    
+    # Get organization
+    org = await org_repo.find_by_id(req.organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    print(f"✅ Organization: {org.name}")
+    
+    # Verify actioning user is owner/admin
+    print("🔍 Verifying user authorization...")
+    actioner_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', req.organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not actioner_check.data:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    actioner_role_id = actioner_check.data.get('role_id')
+    if actioner_role_id not in [1, 2]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can update member roles"
+        )
+    
+    print(f"✅ User authorized (role_id={actioner_role_id})")
+    
+    # Prevent assigning owner role
+    if req.role_id == 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot assign owner role to members"
+        )
+    
+    # Get target member
+    member_response = supabase.table('organization_members') \
+        .select('*') \
+        .eq('id', req.member_id) \
+        .eq('organization_id', req.organization_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found"
+        )
+    
+    member = member_response.data
+    
+    # Check if trying to update own role
+    if member['user_id'] == user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update your own role"
+        )
+    
+    # Update role
+    try:
+        supabase.table('organization_members') \
+            .update({"role_id": req.role_id}) \
+            .eq('id', req.member_id) \
+            .execute()
+        
+        # Get new role name
+        role_response = supabase.table('organization_member_roles') \
+            .select('name') \
+            .eq('id', req.role_id) \
+            .single() \
+            .execute()
+        
+        role_name = role_response.data['name'] if role_response.data else None
+        
+        print(f"✅ Role updated successfully")
+        print(f"{'='*60}\n")
+        
+        return UpdateMemberRoleResponse(
+            success=True,
+            message=f"Member role updated to {role_name}",
+            member_id=req.member_id,
+            new_role_id=req.role_id,
+            new_role_name=role_name
+        )
+        
+    except Exception as e:
+        print(f"❌ Error updating role: {e}")
+        logger.error(f"Error updating member role: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update member role: {str(e)}"
+        )
+
+
+@router.delete("/members/delete", response_model=DeleteMemberResponse)
+async def delete_member(
+    req: DeleteMemberRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Remove a member from the organization
+    
+    Restrictions:
+    - Only owners/admins can delete members
+    - Cannot delete owners (role_id=1)
+    - Updates active_member_count
+    
+    Requires: Owner or Admin role
+    """
+    print(f"\n{'='*60}")
+    print(f"🗑️  Delete Member")
+    print(f"   User ID: {user_id}")
+    print(f"   Organization ID: {req.organization_id}")
+    print(f"   Member ID: {req.member_id}")
+    print(f"{'='*60}")
+    
+    org_repo = OrganizationRepository(supabase)
+    
+    # Get organization
+    org = await org_repo.find_by_id(req.organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    print(f"✅ Organization: {org.name}")
+    
+    # Verify actioning user is owner/admin
+    print("🔍 Verifying user authorization...")
+    actioner_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', req.organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not actioner_check.data:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    actioner_role_id = actioner_check.data.get('role_id')
+    if actioner_role_id not in [1, 2]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can delete members"
+        )
+    
+    print(f"✅ User authorized (role_id={actioner_role_id})")
+    
+    # Get target member
+    member_response = supabase.table('organization_members') \
+        .select('*') \
+        .eq('id', req.member_id) \
+        .eq('organization_id', req.organization_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found"
+        )
+    
+    member = member_response.data
+    
+    # Cannot delete owners
+    if member['role_id'] == 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete organization owners"
+        )
+    
+    # Cannot delete yourself
+    if member['user_id'] == user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete yourself from the organization"
+        )
+    
+    # Delete member (mark as inactive)
+    try:
+        supabase.table('organization_members') \
+            .update({"status": "inactive"}) \
+            .eq('id', req.member_id) \
+            .execute()
+        
+        # Update active_member_count
+        current_count = org.active_member_count or 0
+        new_count = max(current_count - 1, 0)
+        
+        await org_repo.update(org.id, OrganizationUpdate(
+            active_member_count=new_count
+        ))
+        
+        print(f"✅ Member deleted successfully")
+        print(f"   Updated active_member_count: {current_count} → {new_count}")
+        print(f"{'='*60}\n")
+        
+        return DeleteMemberResponse(
+            success=True,
+            message="Member removed from organization"
+        )
+        
+    except Exception as e:
+        print(f"❌ Error deleting member: {e}")
+        logger.error(f"Error deleting member: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete member: {str(e)}"
+        )
+
+
+# ============================================
 # Organization Invitation Endpoints
 # ============================================
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 
-def get_user_id_from_token(authorization: Optional[str]) -> Optional[str]:
-    """Extract user ID from Supabase JWT token"""
-    if not authorization or not authorization.startswith('Bearer '):
-        return None
-    
-    try:
-        token = authorization.replace('Bearer ', '')
-        # Verify with Supabase
-        user = supabase.auth.get_user(token)
-        return user.user.id if user.user else None
-    except Exception as e:
-        logger.error(f"Error extracting user from token: {e}")
-        return None
-
-
 @router.post("/invitations/create", response_model=OrganizationInvitationResponse)
 async def create_organization_invitation(
     req: CreateOrganizationInvitationRequest,
-    authorization: Optional[str] = Header(None)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Create an email invitation to join an organization
     
     Flow:
     1. Validate organization exists
-    2. Check if invitee already a member
-    3. Check for existing pending invitation
-    4. Check seat count and auto-add if needed (Business plan)
-    5. Create invitation with 7-day expiry
-    6. Return invitation link
+    2. Verify user is owner/admin
+    3. Verify organization is on Business plan (only Business plans support invitations)
+    4. Check if invitee already a member
+    5. Check for existing pending invitation
+    6. Check available seats
+    7. Generate invitation token
+    8. Create invitation with 7-day expiry
+    9. Return invitation link
+    
+    Requires: 
+    - Owner or Admin role
+    - Business plan subscription
     """
     print(f"\n{'='*60}")
     print(f"📨 Create Organization Invitation")
+    print(f"   User ID: {user_id}")
     print(f"   Organization ID: {req.organization_id}")
     print(f"   Invitee Email: {req.invitee_email}")
     print(f"{'='*60}")
-    
-    # Get current user
-    user_id = get_user_id_from_token(authorization)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
     
     org_repo = OrganizationRepository(supabase)
     
@@ -265,7 +534,45 @@ async def create_organization_invitation(
     
     print(f"✅ Organization: {org.name} (Plan: {org.plan_type})")
     
-    # 2. Check if invitee email already exists as member
+    # 2. Verify user is a member and has owner/admin role
+    print("🔍 Verifying user authorization...")
+    member_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', req.organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_check.data:
+        print(f"❌ User is not a member of organization {req.organization_id}")
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    # Check if user is owner/admin (role_id 1 or 2)
+    role_id = member_check.data.get('role_id')
+    if role_id not in [1, 2]:
+        print(f"❌ User is not owner/admin (role_id={role_id})")
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can create invitations"
+        )
+    
+    print(f"✅ User authorized (role_id={role_id})")
+    
+    # 3. Verify organization is on Business plan (only Business plans support invitations)
+    if org.plan_type != "business":
+        print(f"❌ Organization is not on Business plan: {org.plan_type}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Organization invitations are only available for Business plans. Current plan: {org.plan_type}. Please upgrade to Business to invite team members."
+        )
+    
+    print(f"✅ Business plan verified")
+    
+    # 4. Check if invitee email already exists as member
     existing_member_response = supabase.table('organization_members') \
         .select('id, user_id') \
         .eq('organization_id', req.organization_id) \
@@ -292,7 +599,7 @@ async def create_organization_invitation(
                 detail="User is already a member of this organization"
             )
     
-    # 3. Check for existing pending invitation (only recent ones matter)
+    # 5. Check for existing pending invitation (only recent ones matter)
     # Allow re-inviting users who previously left or had expired invitations
     existing_invite_response = supabase.table('organization_invitations') \
         .select('*') \
@@ -317,8 +624,8 @@ async def create_organization_invitation(
         # All pending invitations are expired, we can create a new one
         # (They will be auto-marked as expired by the system)
     
-    # 4. Check seat count and auto-add if needed (Business plan only)
-    if org.plan_type == "BUSINESS" and org.stripe_subscription_id:
+    # 6. Check available seats
+    if org.stripe_subscription_id:
         current_member_count = org.active_member_count or 0
         
         # Count pending invitations
@@ -333,48 +640,28 @@ async def create_organization_invitation(
         current_seat_count = org.seat_count or 1
         
         print(f"📊 Seat Check:")
+        print(f"   Plan Type: {org.plan_type}")
         print(f"   Current Members: {current_member_count}")
         print(f"   Pending Invites: {pending_count}")
         print(f"   Projected Total: {projected_member_count}")
         print(f"   Current Seats: {current_seat_count}")
         
         if projected_member_count > current_seat_count:
-            # Auto-add seats
-            new_seat_count = projected_member_count
-            print(f"⚠️  Projected count exceeds seats! Auto-adding seats to {new_seat_count}")
-            
-            try:
-                # Update Stripe subscription
-                updated_subscription = stripe.Subscription.modify(
-                    org.stripe_subscription_id,
-                    items=[{
-                        "id": org.stripe_subscription_item_id,
-                        "quantity": new_seat_count,
-                    }],
-                    proration_behavior="create_prorations",
-                )
-                
-                print(f"✅ Stripe subscription updated to {new_seat_count} seats")
-                
-                # Update local DB (webhook will also update, but we do it here for immediate consistency)
-                await org_repo.update(org.id, OrganizationUpdate(
-                    seat_count=new_seat_count
-                ))
-                
-                print(f"✅ Database updated with new seat count")
-                
-            except Exception as e:
-                print(f"❌ Failed to add seats: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to add additional seats: {str(e)}"
-                )
+            # Not enough seats available
+            seats_needed = projected_member_count - current_seat_count
+            print(f"❌ Not enough seats! Need {seats_needed} more seat(s)")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough seats available. You need {seats_needed} more seat(s). Current seats: {current_seat_count}, Required: {projected_member_count}"
+            )
+        
+        print(f"✅ Sufficient seats available")
     
-    # 5. Generate invitation token and expiry
+    # 7. Generate invitation token and expiry
     token = str(uuid.uuid4())
     expires_at = datetime.utcnow() + timedelta(days=7)
     
-    # 6. Create invitation
+    # 8. Create invitation
     try:
         invitation_data = {
             "organization_id": req.organization_id,
@@ -400,7 +687,7 @@ async def create_organization_invitation(
         print(f"   Token: {token}")
         print(f"   Expires: {expires_at}")
         
-        # 7. Get role name if role_id provided
+        # 9. Get role name if role_id provided
         role_name = None
         if req.role_id:
             role_response = supabase.table('organization_member_roles') \
@@ -410,7 +697,7 @@ async def create_organization_invitation(
                 .execute()
             role_name = role_response.data['name'] if role_response.data else None
         
-        # 8. Get inviter name
+        # 10. Get inviter name
         inviter_name = None
         try:
             profile_response = supabase.table('user_profiles') \
@@ -458,7 +745,7 @@ async def create_organization_invitation(
 @router.post("/invitations/accept")
 async def accept_organization_invitation(
     req: AcceptOrganizationInvitationRequest,
-    authorization: Optional[str] = Header(None)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Accept an organization invitation
@@ -467,20 +754,17 @@ async def accept_organization_invitation(
     1. Validate token and check expiry
     2. Get current user (must be authenticated)
     3. Check if user is already a member
-    4. Add user to organization_members
-    5. Update invitation status to 'accepted'
-    6. Update organization.active_member_count
-    7. Return success
+    4. Check if organization has available seats (Business plan)
+    5. Add user to organization_members
+    6. Update invitation status to 'accepted'
+    7. Update organization.active_member_count
+    8. Return success
     """
     print(f"\n{'='*60}")
     print(f"✅ Accept Organization Invitation")
+    print(f"   User ID: {user_id}")
     print(f"   Token: {req.token}")
     print(f"{'='*60}")
-    
-    # Get current user
-    user_id = get_user_id_from_token(authorization)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized - please log in")
     
     # 1. Get invitation
     invite_response = supabase.table('organization_invitations') \
@@ -541,7 +825,25 @@ async def accept_organization_invitation(
             "message": "You are already a member of this organization"
         }
     
-    # 4. Add member
+    # 4. Check if organization has available seats (Business plan)
+    if org.plan_type == "business" and org.stripe_subscription_id:
+        current_member_count = org.active_member_count or 0
+        current_seat_count = org.seat_count or 1
+        
+        print(f"📊 Seat Check Before Accepting:")
+        print(f"   Current Members: {current_member_count}")
+        print(f"   Current Seats: {current_seat_count}")
+        
+        if current_member_count >= current_seat_count:
+            print(f"❌ No available seats!")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Organization has reached its seat limit ({current_seat_count} seats). Please contact your organization admin to add more seats."
+            )
+        
+        print(f"✅ Seat available for new member")
+    
+    # 5. Add member
     try:
         # Default to 'member' role (id=3) if no role specified
         role_id = invitation.get('role_id')
@@ -572,7 +874,7 @@ async def accept_organization_invitation(
         
         print(f"✅ Added user as organization member")
         
-        # 5. Update invitation status
+        # 6. Update invitation status
         supabase.table('organization_invitations') \
             .update({
                 "status": "accepted",
@@ -584,7 +886,7 @@ async def accept_organization_invitation(
         
         print(f"✅ Invitation marked as accepted")
         
-        # 6. Update active_member_count
+        # 7. Update active_member_count
         current_count = org.active_member_count or 0
         new_count = current_count + 1
         
@@ -682,8 +984,15 @@ async def get_organization_invitations(organization_id: int):
 
 
 @router.delete("/invitations/{invitation_id}")
-async def cancel_organization_invitation(invitation_id: str):
-    """Cancel a pending invitation"""
+async def cancel_organization_invitation(
+    invitation_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Cancel a pending invitation
+    
+    Requires: Owner or Admin role
+    """
     
     # Get invitation
     invite_response = supabase.table('organization_invitations') \
@@ -696,7 +1005,32 @@ async def cancel_organization_invitation(invitation_id: str):
         raise HTTPException(status_code=404, detail="Invitation not found")
     
     invitation = invite_response.data
+    organization_id = invitation['organization_id']
     
+    # Verify user is a member and has owner/admin role
+    member_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_check.data:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    # Check if user is owner/admin (role_id 1 or 2)
+    role_id = member_check.data.get('role_id')
+    if role_id not in [1, 2]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can cancel invitations"
+        )
+    
+    # Verify invitation is pending
     if invitation['status'] != 'pending':
         raise HTTPException(
             status_code=400,

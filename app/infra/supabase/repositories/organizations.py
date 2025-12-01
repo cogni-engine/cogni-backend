@@ -30,3 +30,4 @@ class OrganizationRepository(BaseRepository[Organization, OrganizationCreate, Or
 
 
 
+
