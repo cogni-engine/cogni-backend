@@ -201,6 +201,69 @@ class OrganizationService:
         logger.info(f"Decremented active_member_count for org {org.id}: {current_count} → {new_count}")
         return updated_org
     
+    async def deactivate_non_owner_members(
+        self,
+        organization_id: int
+    ) -> int:
+        """
+        Deactivate all members except the owner (role_id = 1)
+        
+        This is used when an organization is downgraded to the free plan (1 seat).
+        Only the owner remains active.
+        
+        Single responsibility: Bulk member deactivation on downgrade
+        
+        Args:
+            organization_id: Organization ID
+            
+        Returns:
+            Number of members deactivated
+        """
+        print(f"   🚫 Deactivating all non-owner members for organization {organization_id}...")
+        
+        # Get all active non-owner members
+        result = self.supabase.table('organization_members') \
+            .select('id, user_id, role_id') \
+            .eq('organization_id', organization_id) \
+            .eq('status', 'active') \
+            .neq('role_id', 1) \
+            .execute()
+        
+        members_to_deactivate = result.data or []
+        count = len(members_to_deactivate)
+        
+        if count == 0:
+            print(f"   ℹ️  No non-owner members to deactivate")
+            logger.info(f"No non-owner members to deactivate for organization {organization_id}")
+            return 0
+        
+        print(f"   📋 Found {count} non-owner member(s) to deactivate:")
+        for member in members_to_deactivate:
+            print(f"      - Member ID: {member['id']}, User ID: {member['user_id']}, Role ID: {member['role_id']}")
+        
+        # Deactivate all non-owner members
+        self.supabase.table('organization_members') \
+            .update({"status": "inactive"}) \
+            .eq('organization_id', organization_id) \
+            .eq('status', 'active') \
+            .neq('role_id', 1) \
+            .execute()
+        
+        print(f"   ✅ Deactivated {count} non-owner member(s)")
+        logger.info(f"Deactivated {count} non-owner members for organization {organization_id}")
+        
+        # Update active_member_count to 1 (only owner remains)
+        org = await self.org_repo.find_by_id(organization_id)
+        if org:
+            await self.org_repo.update(
+                organization_id,
+                OrganizationUpdate(active_member_count=1)
+            )
+            print(f"   ✅ Updated active_member_count to 1")
+            logger.info(f"Updated active_member_count to 1 for organization {organization_id}")
+        
+        return count
+    
     # ============================================================================
     # DATA ENRICHMENT
     # ============================================================================

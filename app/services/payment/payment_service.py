@@ -3,9 +3,10 @@ import logging
 import json
 from datetime import datetime, timezone
 import stripe
-from app.config import STRIPE_SECRET_KEY, STRIPE_PRICE_ID_PRO, STRIPE_PRICE_ID_BUSINESS
+from app.config import STRIPE_SECRET_KEY, STRIPE_PRICE_ID_PRO, STRIPE_PRICE_ID_BUSINESS, supabase
 from app.infra.supabase.repositories.organizations import OrganizationRepository
 from app.models.organization import OrganizationCreate, OrganizationUpdate, SubscriptionPlanType
+from app.services.organizations import OrganizationService
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class PaymentService:
     
     def __init__(self, org_repo: OrganizationRepository):
         self.org_repo = org_repo
+        self.org_service = OrganizationService(org_repo, supabase)
     
     def _get_plan_type_from_price_id(self, price_id: str | None) -> SubscriptionPlanType:
         """
@@ -358,6 +360,16 @@ class PaymentService:
             print(f"      - Customer ID (kept): {updated_org.stripe_customer_id}")
             print(f"      - Current Period End (kept): {updated_org.current_period_end}")
             logger.info(f"PaymentService: Set organization {org.id} to FREE plan after subscription deletion")
+            
+            # Auto-deactivate all non-owner members (free plan = 1 seat = owner only)
+            print(f"\n   🔄 Auto-deactivating non-owner members...")
+            deactivated_count = await self.org_service.deactivate_non_owner_members(org.id)
+            
+            if deactivated_count > 0:
+                print(f"   ✅ Deactivated {deactivated_count} non-owner member(s)")
+                logger.info(f"PaymentService: Deactivated {deactivated_count} members for organization {org.id}")
+            else:
+                print(f"   ℹ️  No members to deactivate (organization only had owner)")
         else:
             print(f"   ❌ Failed to update organization")
             logger.error(f"PaymentService: Failed to update organization {org.id}")
