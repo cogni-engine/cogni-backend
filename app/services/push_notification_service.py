@@ -85,11 +85,14 @@ class PushNotificationService:
                     "tickets": [],
                 }
 
+            # Get unread message count for the user
+            unread_message_count = await self.get_unread_message_count(notification["user_id"])
+
             # Build Expo push messages
             messages = [
                 {
                     "to": token["expo_push_token"],
-                    "badge": 13,
+                    "badge": unread_message_count,
                     "title": notification["title"],
                     "body": notification["body"],
                     "data": notification.get("data", {}),
@@ -191,3 +194,24 @@ class PushNotificationService:
             "id", notification_id
         ).execute()
 
+    async def get_unread_message_count(self, user_id: str) -> int:
+        """
+        Get unread message count for the user
+        
+        Calls the RPC function 'get_unread_workspace_message_count_excl_self'
+        which returns a single bigint value (count of unread messages excluding self)
+        """
+        try:
+            response = self.supabase.rpc(
+                'get_unread_workspace_message_count_excl_self',
+                {'p_user_id': user_id}
+            ).execute()
+            
+            # The RPC function returns a single scalar bigint value
+            if response.data is not None:
+                return int(response.data)
+            
+            return 0
+        except Exception as e:
+            logger.error(f"Error getting unread message count for user {user_id}: {e}")
+            return 0
