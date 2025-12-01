@@ -470,8 +470,7 @@ async def accept_organization_invitation(
     4. Add user to organization_members
     5. Update invitation status to 'accepted'
     6. Update organization.active_member_count
-    7. Sync seats with Stripe (if needed)
-    8. Return success
+    7. Return success
     """
     print(f"\n{'='*60}")
     print(f"✅ Accept Organization Invitation")
@@ -594,19 +593,6 @@ async def accept_organization_invitation(
         ))
         
         print(f"✅ Updated active_member_count: {current_count} → {new_count}")
-        
-        # 7. Sync seats if Business plan
-        if org.plan_type == "BUSINESS" and org.stripe_subscription_id:
-            try:
-                from app.services.subscription_seat_manager import SubscriptionSeatManager
-                
-                seat_manager = SubscriptionSeatManager(supabase)
-                await seat_manager.sync_seats_with_members(org.id)
-                
-                print(f"✅ Synced seats with Stripe")
-            except Exception as e:
-                logger.warning(f"Failed to sync seats: {e}")
-        
         print(f"{'='*60}\n")
         
         return {

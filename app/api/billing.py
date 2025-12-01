@@ -2,7 +2,6 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
 import stripe
 
 from app.config import (
@@ -15,7 +14,6 @@ from app.config import (
 from app.auth import get_current_user_id
 from app.infra.supabase.repositories.organizations import OrganizationRepository
 from app.models.organization import OrganizationUpdate
-from app.services.subscription_seat_manager import SubscriptionSeatManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +28,7 @@ class UpgradeToBusinessRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     
     organization_id: int = Field(..., alias="organizationId")
-    seat_count: int | None = Field(None, alias="seatCount", ge=1)  # Optional: user-specified seat count
+    seat_count: int = Field(..., alias="seatCount", ge=1)  # Required: user must specify seat count
 
 
 class UpgradeToBusinessResponse(BaseModel):
@@ -39,22 +37,6 @@ class UpgradeToBusinessResponse(BaseModel):
     message: str
     new_plan: str
     seat_count: int
-
-
-class SyncSeatsRequest(BaseModel):
-    """Request model for seat synchronization"""
-    model_config = ConfigDict(populate_by_name=True)
-    
-    organization_id: int = Field(..., alias="organizationId")
-
-
-class SyncSeatsResponse(BaseModel):
-    """Response model for seat synchronization"""
-    success: bool
-    message: str
-    old_seat_count: int
-    new_seat_count: int
-    updated: bool
 
 
 class UpdateSeatsRequest(BaseModel):
@@ -74,7 +56,10 @@ class UpdateSeatsResponse(BaseModel):
 
 
 @router.post("/upgrade-to-business", response_model=UpgradeToBusinessResponse)
-async def upgrade_to_business(req: UpgradeToBusinessRequest):
+async def upgrade_to_business(
+    req: UpgradeToBusinessRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     Upgrade from Pro to Business plan
     
@@ -87,9 +72,12 @@ async def upgrade_to_business(req: UpgradeToBusinessRequest):
     Flow:
     - Pro (1 seat) → Business (N seats where N = active_member_count)
     - Stripe price change + quantity change in one API call
+    
+    Requires: Owner or Admin role
     """
     print(f"\n{'='*60}")
     print(f"🚀 Business Plan Upgrade Request")
+    print(f"   User ID: {user_id}")
     print(f"   Organization ID: {req.organization_id}")
     print(f"{'='*60}")
     
@@ -105,10 +93,35 @@ async def upgrade_to_business(req: UpgradeToBusinessRequest):
         logger.error(f"Organization not found: {req.organization_id}")
         raise HTTPException(status_code=404, detail="Organization not found")
     
-    print(f"✅ Organization found: {org.name}")
-    print(f"   Current plan: {org.plan_type}")
-    print(f"   Active members: {org.active_member_count}")
-    print(f"   Current seat count: {org.seat_count}")
+    print(f"✅ Organization: {org.name}")
+    
+    # Verify user is a member and has owner/admin role
+    print("🔍 Verifying user authorization...")
+    member_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', req.organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_check.data:
+        print(f"❌ User is not a member of organization {req.organization_id}")
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    # Check if user is owner/admin (role_id 1 or 2)
+    role_id = member_check.data.get('role_id')
+    if role_id not in [1, 2]:
+        print(f"❌ User is not owner/admin (role_id={role_id})")
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can upgrade plans"
+        )
+    
+    print(f"✅ User authorized (role_id={role_id})")
     
     # Validate current plan
     if org.plan_type != "pro":
@@ -126,27 +139,15 @@ async def upgrade_to_business(req: UpgradeToBusinessRequest):
             detail="No active Pro subscription found"
         )
     
-    # Calculate seat count for Business plan
-    # Use user-specified seat count if provided, otherwise use active_member_count
-    if req.seat_count is not None:
-        # User specified seat count
-        seat_count = req.seat_count
-        # Validate: seat count must be >= active members
-        if seat_count < org.active_member_count:
-            print(f"❌ Requested seats ({seat_count}) < active members ({org.active_member_count})")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Seat count must be at least {org.active_member_count} (current member count)"
-            )
-    else:
-        # Auto-calculate from active members
-        seat_count = max(org.active_member_count, 1)
-    
-    print(f"📝 Upgrading to Business plan...")
-    print(f"   Subscription ID: {org.stripe_subscription_id}")
-    print(f"   Subscription Item ID: {org.stripe_subscription_item_id}")
-    print(f"   New seat count: {seat_count}")
-    print(f"   Business Price ID: {STRIPE_PRICE_ID_BUSINESS}")
+    # Validate seat count
+    # Seat count must be >= active members
+    seat_count = req.seat_count
+    if seat_count < org.active_member_count:
+        print(f"❌ Requested seats ({seat_count}) < active members ({org.active_member_count})")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Seat count must be at least {org.active_member_count} (current member count)"
+        )
     
     try:
         # Update Stripe subscription
@@ -166,12 +167,6 @@ async def upgrade_to_business(req: UpgradeToBusinessRequest):
             proration_behavior="create_prorations",  # Create proration invoice
         )
         
-        print(f"✅ Stripe subscription updated successfully")
-        print(f"   New status: {updated_subscription['status']}")
-        print(f"   New item ID: {updated_subscription['items']['data'][0]['id']}")
-        print(f"   Quantity: {updated_subscription['items']['data'][0]['quantity']}")
-        print(f"   ⏳ Webhook will update DB to Business plan")
-        print(f"{'='*60}\n")
         
         logger.info(f"Successfully upgraded organization {org.id} to Business plan")
         
@@ -198,65 +193,11 @@ async def upgrade_to_business(req: UpgradeToBusinessRequest):
         )
 
 
-@router.post("/sync-seats", response_model=SyncSeatsResponse)
-async def sync_subscription_seats(req: SyncSeatsRequest):
-    """
-    Sync Stripe subscription seats with organization member count
-    
-    This endpoint should be called after:
-    - Adding a member to the organization
-    - Activating a member
-    
-    Only increases seats (never decreases automatically)
-    
-    For Business plan only.
-    """
-    print(f"\n{'='*60}")
-    print(f"🔄 Seat Sync Request")
-    print(f"   Organization ID: {req.organization_id}")
-    print(f"{'='*60}")
-    
-    logger.info(f"Syncing seats for organization {req.organization_id}")
-    
-    # Initialize services
-    org_repo = OrganizationRepository(supabase)
-    seat_manager = SubscriptionSeatManager(org_repo)
-    
-    # Get organization
-    org = await org_repo.find_by_id(req.organization_id)
-    if not org:
-        print(f"❌ Organization not found: {req.organization_id}")
-        raise HTTPException(status_code=404, detail="Organization not found")
-    
-    old_seat_count = org.seat_count
-    
-    # Sync seats
-    updated = await seat_manager.sync_seats_with_members(req.organization_id)
-    
-    if updated:
-        # Refresh organization to get updated seat count
-        org = await org_repo.find_by_id(req.organization_id)
-        new_seat_count = org.seat_count if org else old_seat_count
-        
-        return SyncSeatsResponse(
-            success=True,
-            message=f"Seats updated from {old_seat_count} to {new_seat_count}",
-            old_seat_count=old_seat_count,
-            new_seat_count=new_seat_count,
-            updated=True
-        )
-    else:
-        return SyncSeatsResponse(
-            success=True,
-            message="No seat update needed",
-            old_seat_count=old_seat_count,
-            new_seat_count=old_seat_count,
-            updated=False
-        )
-
-
 @router.post("/update-seats", response_model=UpdateSeatsResponse)
-async def update_subscription_seats(req: UpdateSeatsRequest):
+async def update_subscription_seats(
+    req: UpdateSeatsRequest,
+    user_id: str = Depends(get_current_user_id)
+):
     """
     Manually update subscription seat count
     
@@ -265,9 +206,11 @@ async def update_subscription_seats(req: UpdateSeatsRequest):
     - Reduce seats (if no members would be affected)
     
     For Business plan only.
+    Requires: Owner or Admin role
     """
     print(f"\n{'='*60}")
     print(f"🎫 Manual Seat Update Request")
+    print(f"   User ID: {user_id}")
     print(f"   Organization ID: {req.organization_id}")
     print(f"   Requested Seats: {req.seat_count}")
     print(f"{'='*60}")
@@ -284,9 +227,35 @@ async def update_subscription_seats(req: UpdateSeatsRequest):
         raise HTTPException(status_code=404, detail="Organization not found")
     
     print(f"✅ Organization: {org.name}")
-    print(f"   Plan: {org.plan_type}")
-    print(f"   Active members: {org.active_member_count}")
-    print(f"   Current seats: {org.seat_count}")
+    
+    # Verify user is a member and has owner/admin role
+    print("🔍 Verifying user authorization...")
+    member_check = supabase.table('organization_members') \
+        .select('role_id') \
+        .eq('organization_id', req.organization_id) \
+        .eq('user_id', user_id) \
+        .eq('status', 'active') \
+        .single() \
+        .execute()
+    
+    if not member_check.data:
+        print(f"❌ User is not a member of organization {req.organization_id}")
+        raise HTTPException(
+            status_code=403,
+            detail="You are not a member of this organization"
+        )
+    
+    # Check if user is owner/admin (role_id 1 or 2)
+    role_id = member_check.data.get('role_id')
+    if role_id not in [1, 2]:
+        print(f"❌ User is not owner/admin (role_id={role_id})")
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners/admins can update seats"
+        )
+    
+    print(f"✅ User authorized (role_id={role_id})")
+    
     
     # Only for Business plan
     if org.plan_type != "business":
@@ -338,12 +307,6 @@ async def update_subscription_seats(req: UpdateSeatsRequest):
             ],
             proration_behavior="create_prorations",  # Pro-rate the change
         )
-        
-        print(f"✅ Stripe subscription updated")
-        print(f"   New quantity: {updated_subscription['items']['data'][0]['quantity']}")
-        print(f"   Status: {updated_subscription['status']}")
-        print(f"   ⏳ Webhook will update DB seat_count")
-        print(f"{'='*60}\n")
         
         logger.info(f"Updated seats for organization {req.organization_id}: {old_seat_count} → {req.seat_count}")
         
