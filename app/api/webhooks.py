@@ -2,9 +2,16 @@ from fastapi import APIRouter
 from app.config import supabase
 from app.services.note_to_task import generate_tasks_from_note
 from app.services.task_to_notification import generate_notifications_from_tasks_batch
+from app.services.ai_task_executor import execute_ai_task
 from app.infra.supabase.repositories.workspaces import WorkspaceRepository, WorkspaceMemberRepository
+from app.infra.supabase.repositories.tasks import TaskRepository
+from app.infra.supabase.repositories.task_results import TaskResultRepository
+from app.models.task_result import TaskResultCreate
+from app.models.task import TaskUpdate
 import asyncio
 from typing import List, Optional
+from datetime import datetime, timezone
+from croniter import croniter
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
@@ -178,3 +185,120 @@ async def sync_memories_local():
         user_id_filter=DEV_USER_IDS,
         exclude_user_ids=False
     )
+
+
+@router.post("/process-recurring-tasks")
+async def process_recurring_tasks():
+    """
+    リカーリングタスク処理エンドポイント（1時間ごと）
+    - recurring_cronを持つタスクを取得
+    - cron式に基づいて実行時刻を判定
+    - is_ai_task=true: AIで実行してtask_resultsに保存
+    - is_ai_task=false: deadlineを次の期限に更新、statusをpendingにリセット
+    """
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info("🔄 CRON: Starting process-recurring-tasks")
+    
+    task_repo = TaskRepository(supabase)
+    task_result_repo = TaskResultRepository(supabase)
+    
+    # recurring_cronを持つタスクを全て取得
+    all_tasks = await task_repo.find_all()
+    recurring_tasks = [task for task in all_tasks if task.recurring_cron]
+    
+    logger.info(f"Found {len(recurring_tasks)} recurring tasks")
+    
+    current_time = datetime.now(timezone.utc)
+    
+    # セマフォで並列実行数を制限（10並列）
+    semaphore = asyncio.Semaphore(10)
+    
+    # 統計情報
+    processed_count = 0
+    ai_executed_count = 0
+    human_reset_count = 0
+    
+    # タスク処理関数
+    async def process_task_with_limit(task):
+        nonlocal processed_count, ai_executed_count, human_reset_count
+        
+        async with semaphore:
+            try:
+                if not task.recurring_cron:
+                    return {"status": "skipped", "task_id": task.id, "reason": "no_cron"}
+                
+                # cron式から次の実行時刻を計算
+                base_time = task.last_recurring_at or task.created_at
+                
+                # タイムゾーン対応
+                if base_time.tzinfo is None:
+                    base_time = base_time.replace(tzinfo=timezone.utc)
+                
+                cron = croniter(task.recurring_cron, base_time)
+                next_run_time = datetime.fromtimestamp(cron.get_next(), tz=timezone.utc)
+                
+                # 次の実行時刻が現在時刻を過ぎているか確認
+                if next_run_time <= current_time:
+                    if task.is_ai_task:
+                        # AI実行
+                        logger.info(f"Executing AI task: {task.id} - {task.title}")
+                        result_text = await execute_ai_task(task)
+                        
+                        # 結果を保存
+                        task_result_create = TaskResultCreate(
+                            task_id=task.id,
+                            result_text=result_text,
+                            executed_at=current_time
+                        )
+                        await task_result_repo.create(task_result_create)
+                        ai_executed_count += 1
+                        
+                    else:
+                        # 人間タスク: deadlineを次の期限に更新
+                        next_deadline_timestamp = cron.get_next()
+                        next_deadline = datetime.fromtimestamp(next_deadline_timestamp, tz=timezone.utc)
+                        task_update = TaskUpdate(
+                            deadline=next_deadline,
+                            status="pending"
+                        )
+                        await task_repo.update(task.id, task_update)
+                        logger.info(f"Reset human task: {task.id} - {task.title}, next deadline: {next_deadline}")
+                        human_reset_count += 1
+                    
+                    # last_recurring_atを更新
+                    update_last_run = TaskUpdate(last_recurring_at=current_time)
+                    await task_repo.update(task.id, update_last_run)
+                    
+                    processed_count += 1
+                    return {
+                        "status": "ok",
+                        "task_id": task.id,
+                        "is_ai_task": task.is_ai_task
+                    }
+                else:
+                    return {"status": "skipped", "task_id": task.id, "reason": "not_due_yet"}
+                    
+            except Exception as e:
+                logger.error(f"❌ Error processing recurring task {task.id}: {e}")
+                return {"status": "error", "task_id": task.id, "error": str(e)}
+    
+    # タスクを並列処理
+    results = await asyncio.gather(
+        *[process_task_with_limit(task) for task in recurring_tasks],
+        return_exceptions=True
+    )
+    
+    # 結果集計
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
+    
+    logger.info(f"🎉 CRON completed: {success}/{len(recurring_tasks)} tasks processed")
+    logger.info(f"📊 AI executed: {ai_executed_count}, Human reset: {human_reset_count}")
+    
+    return {
+        "status": "ok",
+        "tasks_processed": processed_count,
+        "ai_executed": ai_executed_count,
+        "human_reset": human_reset_count
+    }

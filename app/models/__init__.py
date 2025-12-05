@@ -1,5 +1,6 @@
 """Domain models for the application"""
 from .task import Task, TaskCreate, TaskUpdate, TaskUpdateRequest, TaskUpdateResponse
+from .task_result import TaskResult, TaskResultCreate
 from .note import Note, NoteCreate, NoteUpdate
 from .thread import Thread, ThreadCreate, ThreadUpdate
 from .ai_message import AIMessage, AIMessageCreate, AIMessageUpdate, MessageFile, MessageRole
@@ -9,7 +10,7 @@ from .user import UserProfile, UserProfileCreate, UserProfileUpdate
 from .chat import ChatRequest, ChatResponse, ChatMessage
 
 __all__ = [
-    'Task', 'TaskCreate', 'TaskUpdate',
+    'Task', 'TaskCreate', 'TaskUpdate', 'TaskResult', 'TaskResultCreate',
     'Note', 'NoteCreate', 'NoteUpdate',
     'Thread', 'ThreadCreate', 'ThreadUpdate',
     'AIMessage', 'AIMessageCreate', 'AIMessageUpdate', 'MessageFile', 'MessageRole',

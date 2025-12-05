@@ -17,6 +17,7 @@ supabase = "*"
 python-dotenv = "*"
 pydantic = "^2.0"
 httpx = "*"
+croniter = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

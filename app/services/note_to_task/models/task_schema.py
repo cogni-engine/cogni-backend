@@ -25,6 +25,8 @@ class TaskBaseForAI(BaseModel):
     status: Optional[str] = Field("pending", description="ステータス（pending または completed のいずれか）")
     progress: Optional[int] = Field(None, ge=0, le=100, description="進捗率（0-100）")
     source_note_id: int = Field(description="元となったNoteのID（必須）")
+    recurring_cron: Optional[str] = Field(None, description="定期実行のcron式（例: '0 9 * * 1-5' = 平日9時）。定期的に実行するタスクの場合のみ指定")
+    is_ai_task: bool = Field(False, description="AIが自動実行するタスクかどうか。true=AIが実行、false=人間が実行")
 
 
 class TaskListResponse(BaseModel):

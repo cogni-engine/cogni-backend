@@ -26,6 +26,9 @@ class TaskBase(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = Field(None, ge=0, le=100)
     source_note_id: Optional[int] = None
+    recurring_cron: Optional[str] = None
+    is_ai_task: bool = False
+    last_recurring_at: Optional[datetime] = None
 
 
 class TaskCreate(TaskBase):
