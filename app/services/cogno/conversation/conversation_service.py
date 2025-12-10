@@ -132,13 +132,21 @@ async def conversation_stream(
             logger.info("No focused task")
 
         # Get message history (use passed history if available, otherwise fetch)
+        # Limit to most recent 10 messages to avoid token overflow
         final_message_history: Sequence[MessageLike]
         if message_history is None:
-            final_message_history = await ai_message_repo.find_by_thread(thread_id)
-            logger.info(f"Fetched message history: {len(final_message_history)} messages")
+            all_history = await ai_message_repo.find_by_thread(thread_id)
+            # Take only the most recent 10 messages
+            final_message_history = list(all_history[-10:]) if len(all_history) > 10 else all_history
+            logger.info(f"Fetched message history: {len(all_history)} total, using {len(final_message_history)} most recent")
         else:
-            final_message_history = message_history
-            logger.info(f"Using passed message history: {len(final_message_history)} messages")
+            # Limit passed history as well
+            if len(message_history) > 10:
+                final_message_history = list(message_history[-10:])
+                logger.info(f"Limited message history: {len(message_history)} total, using {len(final_message_history)} most recent")
+            else:
+                final_message_history = message_history
+                logger.info(f"Using passed message history: {len(final_message_history)} messages")
         
         # Convert to LLM format (with file support for images)
         messages = await _convert_to_llm_format_with_files(final_message_history, supabase_client)
