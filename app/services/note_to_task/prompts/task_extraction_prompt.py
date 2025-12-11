@@ -16,13 +16,14 @@ prompt_template = ChatPromptTemplate.from_messages([
         "\n★ 簡潔さよりも網羅性を優先してください。情報を省略・要約してはいけません。"
         
         "\n\n【リカーリングタスク（定期実行タスク）】"
-        "\n定期的に実行するタスクの場合、recurring_cronフィールドにcron式を設定してください："
-        "\n- 「毎日9時に〜」→ recurring_cron=\"0 9 * * *\""
-        "\n- 「毎週月曜日9時に〜」→ recurring_cron=\"0 9 * * 1\""
-        "\n- 「平日9時に〜」→ recurring_cron=\"0 9 * * 1-5\""
-        "\n- 「毎月1日に〜」→ recurring_cron=\"0 9 1 * *\""
-        "\n※ cron式は「分 時 日 月 曜日」の順で記述"
-        "\n※ 曜日は0=日曜、1=月曜、...、6=土曜"
+        "\n定期的に実行するタスクの場合、recurrence_patternとnext_run_timeを設定してください："
+        "\n- recurrence_pattern: EVERY_DAY, EVERY_MONTH, EVERY_MONDAY などの形式"
+        "\n  複数曜日の場合はカンマ区切り（例: EVERY_MONDAY, EVERY_FRIDAY）"
+        "\n- next_run_time: 次回実行時刻をISO形式で指定"
+        "\n例："
+        "\n- 「毎日9時」→ recurrence_pattern=\"EVERY_DAY\", next_run_time=\"2024-12-12T09:00:00\""
+        "\n- 「毎週月曜10時」→ recurrence_pattern=\"EVERY_MONDAY\", next_run_time=\"2024-12-16T10:00:00\""
+        "\n- 「平日18時」→ recurrence_pattern=\"EVERY_MONDAY, EVERY_TUESDAY, EVERY_WEDNESDAY, EVERY_THURSDAY, EVERY_FRIDAY\", next_run_time=\"2024-12-11T18:00:00\""
         
         "\n\n【AIタスク（AI自動実行タスク）】"
         "\nis_ai_taskフィールドで、AIが事前に実行できるタスクかどうかを判定してください："
@@ -109,9 +110,10 @@ Note内容:
                ※ Noteの言語をそのまま保持してください
                
   - status: "pending"
-  - deadline: ISO形式で指定（定期タスクの場合は初回実行時刻）
+  - deadline: ISO形式で指定（定期タスクの場合は不要）
   - source_note_id: 元のNoteのID
-  - recurring_cron: 定期実行タスクの場合、cron式を指定（例: "0 9 * * 1-5"）
+  - recurrence_pattern: 定期実行の場合のみ指定（例: "EVERY_DAY", "EVERY_MONDAY, EVERY_FRIDAY"）
+  - next_run_time: 定期実行の場合のみ指定（ISO形式）
   - is_ai_task: 人間が実行するタスクの前に、AIが事前に準備・調査・原案作成などをしておけるタスクの場合はtrue、そうでない場合はfalse（デフォルト）
 - Noteの全ての内容が必ずいずれかのタスクのdescriptionの【Note内容】セクションに一言一句含まれるようにしてください
 - 実行すべきタスクが見つからない場合は、空の配列を返してください。"""

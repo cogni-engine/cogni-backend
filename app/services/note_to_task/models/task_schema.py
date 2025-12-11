@@ -2,7 +2,14 @@
 from typing import List, Optional
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# 許可されたパターンの定義
+VALID_RECURRENCE_PATTERNS = {
+    "EVERY_DAY", "EVERY_WEEK", "EVERY_MONTH", "EVERY_YEAR",
+    "EVERY_MONDAY", "EVERY_TUESDAY", "EVERY_WEDNESDAY", 
+    "EVERY_THURSDAY", "EVERY_FRIDAY", "EVERY_SATURDAY", "EVERY_SUNDAY"
+}
 
 
 class TaskBaseForAI(BaseModel):
@@ -25,8 +32,47 @@ class TaskBaseForAI(BaseModel):
     status: Optional[str] = Field("pending", description="ステータス（pending または completed のいずれか）")
     progress: Optional[int] = Field(None, ge=0, le=100, description="進捗率（0-100）")
     source_note_id: int = Field(description="元となったNoteのID（必須）")
-    recurring_cron: Optional[str] = Field(None, description="定期実行のcron式（例: '0 9 * * 1-5' = 平日9時）。定期的に実行するタスクの場合のみ指定")
+    recurrence_pattern: Optional[str] = Field(None, description="定期実行のパターン（EVERY_DAY, EVERY_WEEK, EVERY_MONTH, EVERY_YEAR, EVERY_MONDAY, EVERY_TUESDAY, EVERY_WEDNESDAY, EVERY_THURSDAY, EVERY_FRIDAY, EVERY_SATURDAY, EVERY_SUNDAY）。複数曜日の場合はカンマ区切り。定期的に実行するタスクの場合のみ指定")
+    next_run_time: Optional[datetime] = Field(None, description="次の実行時刻（ISO形式: 2024-10-15T00:00:00）。定期的に実行するタスクの場合のみ指定")
     is_ai_task: bool = Field(False, description="AIが自動実行するタスクかどうか。true=AIが実行、false=人間が実行")
+    
+    @field_validator('recurrence_pattern')
+    @classmethod
+    def validate_recurrence_pattern(cls, v: Optional[str]) -> Optional[str]:
+        """recurrence_patternのバリデーション"""
+        if v is None:
+            return v
+        
+        # カンマ区切りで分割
+        patterns = [p.strip() for p in v.split(',')]
+        
+        # 各パターンが有効かチェック
+        for pattern in patterns:
+            if pattern not in VALID_RECURRENCE_PATTERNS:
+                raise ValueError(
+                    f"Invalid recurrence_pattern: '{pattern}'. "
+                    f"Valid patterns are: {', '.join(sorted(VALID_RECURRENCE_PATTERNS))}"
+                )
+        
+        return v
+    
+    @model_validator(mode='after')
+    def validate_recurrence_fields(self):
+        """recurrence_patternとnext_run_timeのセットバリデーション"""
+        has_pattern = self.recurrence_pattern is not None
+        has_next_run = self.next_run_time is not None
+        
+        if has_pattern and not has_next_run:
+            raise ValueError(
+                "recurrence_patternが指定されている場合、next_run_timeも必須です"
+            )
+        
+        if not has_pattern and has_next_run:
+            raise ValueError(
+                "next_run_timeが指定されている場合、recurrence_patternも必須です"
+            )
+        
+        return self
 
 
 class TaskListResponse(BaseModel):
