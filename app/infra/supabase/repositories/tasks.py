@@ -39,6 +39,24 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
         else:
             return await self.find_by_filters({"user_id": user_id}, limit=limit)
     
+    async def find_recurring_by_user(self, user_id: str) -> List[Task]:
+        """Find all recurring tasks for a user (where recurrence_pattern is not null)
+        
+        Args:
+            user_id: User ID to find recurring tasks for
+            
+        Returns:
+            List of recurring tasks for the user
+        """
+        response = (
+            self._client.table(self._table_name)
+            .select("*")
+            .eq("user_id", user_id)
+            .not_.is_("recurrence_pattern", "null")
+            .execute()
+        )
+        return self._to_models(response.data)
+    
     async def mark_completed(self, task_id: int) -> Optional[Task]:
         """Mark a task as completed"""
         update_data = TaskUpdate(completed_at=datetime.now(), status="completed", progress=100)

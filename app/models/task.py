@@ -47,6 +47,9 @@ class TaskUpdate(BaseModel):
     progress: Optional[int] = Field(None, ge=0, le=100)
     completed_at: Optional[datetime] = None
     assigner_id: Optional[str] = None
+    recurrence_pattern: Optional[str] = None
+    is_ai_task: Optional[bool] = None
+    next_run_time: Optional[datetime] = None
 
 
 class Task(TaskBase):
@@ -57,6 +60,9 @@ class Task(TaskBase):
     completed_at: Optional[datetime] = None
     user_id: str
     assigner_id: Optional[str] = None
+    recurrence_pattern: Optional[str] = None
+    is_ai_task: Optional[bool] = False
+    next_run_time: Optional[datetime] = None
     
     class Config:
         from_attributes = True
