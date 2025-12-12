@@ -52,3 +52,26 @@ def format_datetime_ja(dt: datetime) -> str:
     
     return formatted
 
+
+def convert_jst_to_utc(dt: datetime) -> datetime:
+    """
+    入力のタイムゾーンに関わらず、9時間分ずらしてUTCに変換する
+    
+    Args:
+        dt: datetime（タイムゾーン情報に関わらず、JSTとして解釈して9時間引く）
+    
+    Returns:
+        UTCのdatetime（timezone.utc）
+    """
+    # タイムゾーン情報を削除してnaive datetimeにする
+    dt_naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
+    
+    # JST（UTC+9）として解釈
+    jst = timezone(timedelta(hours=9))
+    dt_jst = dt_naive.replace(tzinfo=jst)
+    
+    # JSTからUTCに変換（9時間引く）
+    utc_dt = dt_jst.astimezone(timezone.utc)
+    
+    return utc_dt
+

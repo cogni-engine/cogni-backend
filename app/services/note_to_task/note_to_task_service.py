@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from app.config import supabase
 from app.infra.supabase.repositories.tasks import TaskRepository
 from app.models.task import Task, TaskCreate
-from app.utils.datetime_helper import get_current_datetime_ja
+from app.utils.datetime_helper import get_current_datetime_ja, convert_jst_to_utc
 from .models import TaskListResponse
 from .prompts import prompt_template
 
@@ -60,17 +60,33 @@ async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[
         "note_title": note_title,
         "_note_text": note_text
     })
-    
+
+
+    print(f"🕐 result: {result}")
     # TaskRepositoryでタスクを保存
     # 各タスク × 各user_idで保存
     saved_tasks: List[Task] = []
     
     for task in result.tasks:
         for user_id in user_ids:
+            # タスクデータを取得
+            task_data = task.model_dump(exclude={'source_note_id'})
+            
+            # next_run_timeとdeadlineをJSTからUTCに変換
+            if task_data.get('next_run_time'):
+                original_next_run_time = task_data['next_run_time']
+                task_data['next_run_time'] = convert_jst_to_utc(original_next_run_time)
+                print(f"🕐 next_run_time変換: JST {original_next_run_time} → UTC {task_data['next_run_time']} (tzinfo: {task_data['next_run_time'].tzinfo})")
+            
+            if task_data.get('deadline'):
+                original_deadline = task_data['deadline']
+                task_data['deadline'] = convert_jst_to_utc(original_deadline)
+                print(f"🕐 deadline変換: JST {original_deadline} → UTC {task_data['deadline']} (tzinfo: {task_data['deadline'].tzinfo})")
+            
             task_create = TaskCreate(
                 user_id=user_id,
                 source_note_id=note_id,
-                **task.model_dump(exclude={'source_note_id'})
+                **task_data
             )
             try:
                 saved_task = await task_repo.create(task_create)
