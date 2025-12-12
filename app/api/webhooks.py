@@ -3,15 +3,19 @@ from app.config import supabase
 from app.services.note_to_task import generate_tasks_from_note
 from app.services.task_to_notification import generate_notifications_from_tasks_batch
 from app.services.ai_task_executor import execute_ai_task
+from app.services.ai_task_executor.completion_notification_service import generate_completion_notification
 from app.infra.supabase.repositories.workspaces import WorkspaceRepository, WorkspaceMemberRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
+from app.infra.supabase.repositories.notifications import AINotificationRepository
 from app.infra.supabase.repositories.task_results import TaskResultRepository
+from app.models.task import TaskUpdate, Task
+from app.models.notification import AINotificationCreate
 from app.models.task_result import TaskResultCreate
-from app.models.task import TaskUpdate
+from app.utils.recurrence_calculator import calculate_next_run_time
 import asyncio
 from typing import List, Optional
-from datetime import datetime, timezone
-from croniter import croniter
+from datetime import datetime, timezone, timedelta
+import logging
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
@@ -190,99 +194,119 @@ async def sync_memories_local():
 @router.post("/process-recurring-tasks")
 async def process_recurring_tasks():
     """
-    リカーリングタスク処理エンドポイント（1時間ごと）
-    - recurring_cronを持つタスクを取得
-    - cron式に基づいて実行時刻を判定
-    - is_ai_task=true: AIで実行してtask_resultsに保存
-    - is_ai_task=false: deadlineを次の期限に更新、statusをpendingにリセット
-    """
-    import logging
+    定期タスクの次回実行時刻を更新するエンドポイント（1日1回、午前0時に実行）
     
+    処理内容:
+    1. 昨日の午前0時〜今日の午前0時の範囲でnext_run_timeが該当するタスクを取得
+    2. 各タスクのnext_run_timeを次回実行時刻に更新
+    3. is_recurring_task_active=Trueのタスクについて、既存の通知を複製して次回分を作成
+    """
     logger = logging.getLogger(__name__)
     logger.info("🔄 CRON: Starting process-recurring-tasks")
     
+    # 昨日の午前0時と今日の午前0時を取得
+    now = datetime.now(timezone.utc)
+    today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_midnight = today_midnight - timedelta(days=1)
+    
+    logger.info(f"Processing tasks with next_run_time between {yesterday_midnight} and {today_midnight}")
+    
+    # TaskRepositoryでタスクを取得
     task_repo = TaskRepository(supabase)
-    task_result_repo = TaskResultRepository(supabase)
+    notification_repo = AINotificationRepository(supabase)
     
-    # recurring_cronを持つタスクを全て取得
-    all_tasks = await task_repo.find_all()
-    recurring_tasks = [task for task in all_tasks if task.recurring_cron]
+    # next_run_timeが昨日の午前0時〜今日の午前0時の範囲にあるタスクを取得
+    # recurrence_patternがNULLでないものが対象
+    response = (
+        supabase.table("tasks")
+        .select("*")
+        .gte("next_run_time", yesterday_midnight.isoformat())
+        .lt("next_run_time", today_midnight.isoformat())
+        .not_.is_("recurrence_pattern", "null")
+        .execute()
+    )
     
-    logger.info(f"Found {len(recurring_tasks)} recurring tasks")
+    recurring_tasks = response.data if response.data else []
+    logger.info(f"Found {len(recurring_tasks)} recurring tasks to process")
     
-    current_time = datetime.now(timezone.utc)
+    if not recurring_tasks:
+        return {
+            "status": "ok",
+            "tasks_processed": 0,
+            "notifications_created": 0
+        }
     
     # セマフォで並列実行数を制限（10並列）
     semaphore = asyncio.Semaphore(10)
     
     # 統計情報
-    processed_count = 0
-    ai_executed_count = 0
-    human_reset_count = 0
+    tasks_updated = 0
+    notifications_created = 0
     
     # タスク処理関数
-    async def process_task_with_limit(task):
-        nonlocal processed_count, ai_executed_count, human_reset_count
+    async def process_task_with_limit(task_data):
+        nonlocal tasks_updated, notifications_created
         
         async with semaphore:
             try:
-                if not task.recurring_cron:
-                    return {"status": "skipped", "task_id": task.id, "reason": "no_cron"}
+                task_id = task_data["id"]
+                old_next_run_time = datetime.fromisoformat(task_data["next_run_time"].replace("Z", "+00:00"))
+                recurrence_pattern = task_data["recurrence_pattern"]
+                is_active = task_data.get("is_recurring_task_active", True)
                 
-                # cron式から次の実行時刻を計算
-                base_time = task.last_recurring_at or task.created_at
+                # 新しいnext_run_timeを計算
+                new_next_run_time = calculate_next_run_time(old_next_run_time, recurrence_pattern)
                 
-                # タイムゾーン対応
-                if base_time.tzinfo is None:
-                    base_time = base_time.replace(tzinfo=timezone.utc)
+                # タスクのnext_run_timeを更新
+                update_data = TaskUpdate(next_run_time=new_next_run_time)
+                await task_repo.update(task_id, update_data)
+                tasks_updated += 1
                 
-                cron = croniter(task.recurring_cron, base_time)
-                next_run_time = datetime.fromtimestamp(cron.get_next(), tz=timezone.utc)
+                logger.info(f"✅ Task {task_id}: Updated next_run_time from {old_next_run_time} to {new_next_run_time}")
                 
-                # 次の実行時刻が現在時刻を過ぎているか確認
-                if next_run_time <= current_time:
-                    if task.is_ai_task:
-                        # AI実行
-                        logger.info(f"Executing AI task: {task.id} - {task.title}")
-                        result_text = await execute_ai_task(task)
-                        
-                        # 結果を保存
-                        task_result_create = TaskResultCreate(
-                            task_id=task.id,
-                            result_text=result_text,
-                            executed_at=current_time
-                        )
-                        await task_result_repo.create(task_result_create)
-                        ai_executed_count += 1
-                        
+                # is_recurring_task_active=Trueの場合のみ、通知を複製
+                if is_active:
+                    # 既存の通知を取得
+                    existing_notifications = await notification_repo.find_by_filters({"task_id": task_id})
+                    
+                    if existing_notifications:
+                        # 各通知を複製
+                        for notification in existing_notifications:
+                            # 元のdue_dateとold_next_run_timeの差分を計算
+                            time_diff = notification.due_date - old_next_run_time
+                            
+                            # 新しいdue_dateを計算
+                            new_due_date = new_next_run_time + time_diff
+                            
+                            # 新しい通知を作成
+                            new_notification = AINotificationCreate(
+                                title=notification.title,
+                                ai_context=notification.ai_context,
+                                body=notification.body,
+                                due_date=new_due_date,
+                                task_id=task_id,
+                                user_id=notification.user_id,
+                                status=notification.status
+                            )
+                            
+                            await notification_repo.create(new_notification)
+                            notifications_created += 1
+                            
+                            logger.info(f"📬 Task {task_id}: Created notification with due_date {new_due_date}")
                     else:
-                        # 人間タスク: deadlineを次の期限に更新
-                        next_deadline_timestamp = cron.get_next()
-                        next_deadline = datetime.fromtimestamp(next_deadline_timestamp, tz=timezone.utc)
-                        task_update = TaskUpdate(
-                            deadline=next_deadline,
-                            status="pending"
-                        )
-                        await task_repo.update(task.id, task_update)
-                        logger.info(f"Reset human task: {task.id} - {task.title}, next deadline: {next_deadline}")
-                        human_reset_count += 1
-                    
-                    # last_recurring_atを更新
-                    update_last_run = TaskUpdate(last_recurring_at=current_time)
-                    await task_repo.update(task.id, update_last_run)
-                    
-                    processed_count += 1
-                    return {
-                        "status": "ok",
-                        "task_id": task.id,
-                        "is_ai_task": task.is_ai_task
-                    }
+                        logger.info(f"ℹ️ Task {task_id}: No existing notifications to duplicate")
                 else:
-                    return {"status": "skipped", "task_id": task.id, "reason": "not_due_yet"}
-                    
+                    logger.info(f"ℹ️ Task {task_id}: is_recurring_task_active=False, skipping notification duplication")
+                
+                return {
+                    "status": "ok",
+                    "task_id": task_id,
+                    "notifications_created": len(existing_notifications) if is_active else 0
+                }
+                
             except Exception as e:
-                logger.error(f"❌ Error processing recurring task {task.id}: {e}")
-                return {"status": "error", "task_id": task.id, "error": str(e)}
+                logger.error(f"❌ Error processing task {task_data.get('id')}: {e}")
+                return {"status": "error", "task_id": task_data.get("id"), "error": str(e)}
     
     # タスクを並列処理
     results = await asyncio.gather(
@@ -294,11 +318,209 @@ async def process_recurring_tasks():
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
     
     logger.info(f"🎉 CRON completed: {success}/{len(recurring_tasks)} tasks processed")
-    logger.info(f"📊 AI executed: {ai_executed_count}, Human reset: {human_reset_count}")
+    logger.info(f"📊 Tasks updated: {tasks_updated}, Notifications created: {notifications_created}")
     
     return {
         "status": "ok",
-        "tasks_processed": processed_count,
-        "ai_executed": ai_executed_count,
-        "human_reset": human_reset_count
+        "tasks_processed": tasks_updated,
+        "notifications_created": notifications_created
     }
+
+
+async def _execute_ai_tasks_common(
+    minutes_ahead: int,
+    user_id_filter: Optional[List[str]] = None,
+    exclude_user_ids: bool = False
+) -> dict:
+    """
+    AIタスク自動実行の共通処理
+    
+    Args:
+        minutes_ahead: 何分先までのタスクを実行するか
+        user_id_filter: 指定されたuser_idのタスクのみ処理（Noneの場合は全て）
+        exclude_user_ids: Trueの場合、user_id_filterに含まれるuser_idを除外
+    
+    Returns:
+        処理結果の統計情報
+    """
+    logger = logging.getLogger(__name__)
+    
+    filter_desc = ""
+    if user_id_filter:
+        if exclude_user_ids:
+            filter_desc = " (excluding dev users)"
+        else:
+            filter_desc = " (dev users only)"
+    
+    logger.info(f"🔄 CRON: Starting execute-ai-tasks{filter_desc}")
+    
+    # 現在時刻と指定分後の時刻を取得
+    now = datetime.now(timezone.utc)
+    target_time = now + timedelta(minutes=minutes_ahead)
+    
+    logger.info(f"Processing AI tasks with next_run_time or deadline between {now} and {target_time}{filter_desc}")
+    
+    # TaskResultRepositoryとAINotificationRepositoryを初期化
+    task_result_repo = TaskResultRepository(supabase)
+    notification_repo = AINotificationRepository(supabase)
+    
+    # 条件に合うタスクを取得
+    # is_recurring_task_active=True AND is_ai_task=True AND
+    # (now < next_run_time <= target_time OR now < deadline <= target_time)
+    try:
+        response = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("is_recurring_task_active", True)
+            .eq("is_ai_task", True)
+            .or_(
+                f"and(next_run_time.gt.{now.isoformat()},next_run_time.lte.{target_time.isoformat()}),"
+                f"and(deadline.gt.{now.isoformat()},deadline.lte.{target_time.isoformat()})"
+            )
+            .execute()
+        )
+        
+        ai_tasks = response.data if response.data else []
+        logger.info(f"Found {len(ai_tasks)} AI tasks to execute{filter_desc}")
+        
+    except Exception as e:
+        logger.error(f"Failed to query AI tasks: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "tasks_executed": 0
+        }
+    
+    # user_idフィルタリングを適用
+    if user_id_filter and ai_tasks:
+        if exclude_user_ids:
+            # 開発者を除外
+            ai_tasks = [task for task in ai_tasks if task.get("user_id") not in user_id_filter]
+            logger.info(f"After excluding dev users: {len(ai_tasks)} AI tasks")
+        else:
+            # 開発者のみ
+            ai_tasks = [task for task in ai_tasks if task.get("user_id") in user_id_filter]
+            logger.info(f"After filtering dev users only: {len(ai_tasks)} AI tasks")
+    
+    if not ai_tasks:
+        return {
+            "status": "ok",
+            "tasks_executed": 0,
+            "results_saved": 0
+        }
+    
+    # セマフォで並列実行数を制限（10並列）
+    semaphore = asyncio.Semaphore(10)
+    
+    # 統計情報
+    tasks_executed = 0
+    results_saved = 0
+    notifications_created = 0
+    
+    # タスク処理関数
+    async def process_ai_task_with_limit(task_data):
+        nonlocal tasks_executed, results_saved, notifications_created
+        
+        async with semaphore:
+            try:
+                # TaskデータをTaskモデルに変換
+                task = Task(**task_data)
+                
+                logger.info(f"🤖 Executing AI task {task.id}: {task.title}")
+                
+                # AIタスクを実行（titleとtextの両方を取得）
+                result_title, result_text = await execute_ai_task(task)
+                tasks_executed += 1
+                
+                # 結果をtask_resultsに保存
+                task_result_create = TaskResultCreate(
+                    task_id=task.id,
+                    result_title=result_title,
+                    result_text=result_text,
+                    executed_at=datetime.now(timezone.utc)
+                )
+                
+                saved_result = await task_result_repo.create(task_result_create)
+                results_saved += 1
+                
+                logger.info(f"✅ Task {task.id} executed and saved: result_id={saved_result.id}")
+                
+                # 完了通知を生成
+                # due_dateはnext_run_timeがあればそれ、なければdeadlineを使用
+                due_date = task.next_run_time if task.next_run_time else task.deadline
+                
+                if due_date:
+                    try:
+                        notification = await generate_completion_notification(
+                            task=task,
+                            result_title=result_title,
+                            result_text=result_text,
+                            due_date=due_date
+                        )
+                        
+                        # 通知を保存
+                        saved_notification = await notification_repo.create(notification)
+                        notifications_created += 1
+                        
+                        logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
+                    except Exception as e:
+                        logger.error(f"Failed to create completion notification for task {task.id}: {e}")
+                else:
+                    logger.warning(f"Task {task.id}: No next_run_time or deadline, skipping notification creation")
+                
+                return {
+                    "status": "ok",
+                    "task_id": task.id,
+                    "result_id": saved_result.id
+                }
+                
+            except Exception as e:
+                logger.error(f"❌ Error executing AI task {task_data.get('id')}: {e}")
+                return {"status": "error", "task_id": task_data.get("id"), "error": str(e)}
+    
+    # タスクを並列処理
+    results = await asyncio.gather(
+        *[process_ai_task_with_limit(task) for task in ai_tasks],
+        return_exceptions=True
+    )
+    
+    # 結果集計
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
+    
+    logger.info(f"🎉 CRON completed: {success}/{len(ai_tasks)} AI tasks executed{filter_desc}")
+    logger.info(f"📊 Tasks executed: {tasks_executed}, Results saved: {results_saved}, Notifications created: {notifications_created}")
+    
+    return {
+        "status": "ok",
+        "tasks_executed": tasks_executed,
+        "results_saved": results_saved,
+        "notifications_created": notifications_created
+    }
+
+
+@router.post("/execute-ai-tasks")
+async def execute_ai_tasks():
+    """
+    本番用CRON実行エンドポイント（10分ごと）
+    - 次の10分以内にnext_run_timeまたはdeadlineが来るタスクを実行
+    - 開発者のタスクを除外
+    """
+    return await _execute_ai_tasks_common(
+        minutes_ahead=10,
+        user_id_filter=DEV_USER_IDS,
+        exclude_user_ids=True
+    )
+
+
+@router.post("/execute-ai-tasks-local")
+async def execute_ai_tasks_local():
+    """
+    ローカル開発用CRON実行エンドポイント（1分ごと）
+    - 次の1分以内にnext_run_timeまたはdeadlineが来るタスクを実行
+    - 開発者のタスクのみを処理
+    """
+    return await _execute_ai_tasks_common(
+        minutes_ahead=1,
+        user_id_filter=DEV_USER_IDS,
+        exclude_user_ids=False
+    )

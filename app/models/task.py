@@ -29,7 +29,6 @@ class TaskBase(BaseModel):
     recurrence_pattern: Optional[str] = None
     next_run_time: Optional[datetime] = None
     is_ai_task: bool = False
-    last_recurring_at: Optional[datetime] = None
 
 
 class TaskCreate(TaskBase):

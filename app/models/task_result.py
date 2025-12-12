@@ -6,6 +6,7 @@ from typing import Optional
 class TaskResultBase(BaseModel):
     """Base task result fields"""
     task_id: int
+    result_title: str
     result_text: str
 
 
