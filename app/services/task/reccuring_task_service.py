@@ -8,7 +8,7 @@ Handles business logic for recurring tasks including:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 
 from supabase import Client
@@ -129,7 +129,7 @@ class RecurringTaskService:
 
         # Handle status changes
         if updates.get("status") == "completed" and not updates.get("completed_at"):
-            updates["completed_at"] = datetime.now()
+            updates["completed_at"] = datetime.now(timezone.utc)
         elif updates.get("status") == "pending":
             updates["completed_at"] = None
 
@@ -175,13 +175,13 @@ class RecurringTaskService:
         Find all recurring tasks that are due to run.
         
         Args:
-            before: Find tasks due before this time (defaults to now)
+            before: Find tasks due before this time (defaults to now in UTC)
             
         Returns:
             List of tasks that are due
         """
         if before is None:
-            before = datetime.now()
+            before = datetime.now(timezone.utc)
 
         response = (
             self.supabase.table("tasks")
@@ -210,7 +210,7 @@ class RecurringTaskService:
 
         new_next_run_time = self.calculate_next_run_time(
             task.recurrence_pattern,
-            from_time=task.next_run_time or datetime.now()
+            from_time=task.next_run_time or datetime.now(timezone.utc)
         )
 
         update_data = TaskUpdate(
@@ -237,13 +237,17 @@ class RecurringTaskService:
         
         Args:
             recurrence_pattern: Pattern like 'daily', 'weekly', etc.
-            from_time: Base time to calculate from (defaults to now)
+            from_time: Base time to calculate from (defaults to now in UTC)
             
         Returns:
-            The next run time
+            The next run time (timezone-aware UTC)
         """
         if from_time is None:
-            from_time = datetime.now()
+            from_time = datetime.now(timezone.utc)
+        
+        # Ensure from_time is timezone-aware (convert naive to UTC)
+        if from_time.tzinfo is None:
+            from_time = from_time.replace(tzinfo=timezone.utc)
 
         pattern_lower = recurrence_pattern.lower()
         interval = RECURRENCE_PATTERNS.get(pattern_lower)

@@ -1,5 +1,5 @@
 """Task repository"""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 from supabase import Client  # type: ignore
@@ -59,7 +59,7 @@ class TaskRepository(BaseRepository[Task, TaskCreate, TaskUpdate]):
     
     async def mark_completed(self, task_id: int) -> Optional[Task]:
         """Mark a task as completed"""
-        update_data = TaskUpdate(completed_at=datetime.now(), status="completed", progress=100)
+        update_data = TaskUpdate(completed_at=datetime.now(timezone.utc), status="completed", progress=100)
         return await self.update(task_id, update_data)
 
     async def mark_pending(self, task_id: int) -> Optional[Task]:
