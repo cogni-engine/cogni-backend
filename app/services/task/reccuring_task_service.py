@@ -133,17 +133,23 @@ class RecurringTaskService:
         elif updates.get("status") == "pending":
             updates["completed_at"] = None
 
-        update_data = TaskUpdate(
-            title=updates.get("title"),
-            description=updates.get("description"),
-            deadline=None,
-            status=None,
-            progress=None,
-            completed_at=None,
-            recurrence_pattern=updates.get("recurrence_pattern"),
-            is_ai_task=updates.get("is_ai_task"),
-            next_run_time=updates.get("next_run_time"),
-        )
+        # Build update data with only provided fields (non-None values)
+        update_fields = {}
+        field_mapping = [
+            "title", "description", "deadline", "status", "progress",
+            "completed_at", "recurrence_pattern", "is_ai_task",
+            "is_recurring_task_active", "next_run_time"
+        ]
+        
+        for field in field_mapping:
+            if field in updates and updates[field] is not None:
+                update_fields[field] = updates[field]
+        
+        # Special case: allow explicit setting of is_recurring_task_active to False
+        if "is_recurring_task_active" in updates:
+            update_fields["is_recurring_task_active"] = updates["is_recurring_task_active"]
+
+        update_data = TaskUpdate(**update_fields)
 
         task = await self.task_repo.update(task_id, update_data)
         if task:

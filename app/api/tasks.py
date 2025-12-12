@@ -26,9 +26,10 @@ class CreateTaskRequest(BaseModel):
     progress: Optional[int] = None
     source_note_id: Optional[int] = None
     assigner_id: Optional[str] = None
-    recurrence_pattern: Optional[str] = None
-    is_ai_task: Optional[bool] = False
-    next_run_time: Optional[datetime] = None
+    recurrence_pattern: str
+    is_ai_task: bool = False
+    is_recurring_task_active: bool = True
+    next_run_time: datetime
 
 
 class UpdateTaskRequest(BaseModel):
@@ -40,6 +41,7 @@ class UpdateTaskRequest(BaseModel):
     completed_at: Optional[datetime] = None
     recurrence_pattern: Optional[str] = None
     is_ai_task: Optional[bool] = None
+    is_recurring_task_active: Optional[bool] = None
     next_run_time: Optional[datetime] = None
 
 
@@ -119,6 +121,7 @@ async def update_task(task_id: int, request: UpdateTaskRequest):
         completed_at=request.completed_at,
         recurrence_pattern=request.recurrence_pattern,
         is_ai_task=request.is_ai_task,
+        is_recurring_task_active=request.is_recurring_task_active,
         next_run_time=request.next_run_time,
     )
     

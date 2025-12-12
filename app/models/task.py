@@ -29,6 +29,8 @@ class TaskBase(BaseModel):
     recurrence_pattern: Optional[str] = None
     next_run_time: Optional[datetime] = None
     is_ai_task: bool = False
+    is_recurring_task_active: bool = True
+    last_recurring_at: Optional[datetime] = None
 
 
 class TaskCreate(TaskBase):
@@ -48,6 +50,7 @@ class TaskUpdate(BaseModel):
     assigner_id: Optional[str] = None
     recurrence_pattern: Optional[str] = None
     is_ai_task: Optional[bool] = None
+    is_recurring_task_active: Optional[bool] = None
     next_run_time: Optional[datetime] = None
 
 
@@ -60,7 +63,8 @@ class Task(TaskBase):
     user_id: str
     assigner_id: Optional[str] = None
     recurrence_pattern: Optional[str] = None
-    is_ai_task: Optional[bool] = False
+    is_ai_task: bool = False
+    is_recurring_task_active: bool = True
     next_run_time: Optional[datetime] = None
     
     class Config:
