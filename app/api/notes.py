@@ -35,4 +35,3 @@ async def generate_tasks_for_note(note_id: int, request: GenerateTasksRequest):
         "tasks": tasks,
         "count": len(tasks)
     }
-

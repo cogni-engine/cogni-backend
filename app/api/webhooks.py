@@ -185,11 +185,12 @@ async def sync_memories_local():
     - 開発者のworkspaceのみを処理
     - ノート→タスク生成→通知生成（一連の流れを完結）
     """
-    return await _process_notes_sync(
-        minutes_ago=1,
-        user_id_filter=DEV_USER_IDS,
-        exclude_user_ids=False
-    )
+    # return await _process_notes_sync(
+    #     minutes_ago=1,
+    #     user_id_filter=DEV_USER_IDS,
+    #     exclude_user_ids=False
+    # )
+    pass
 
 
 @router.post("/process-recurring-tasks")
