@@ -99,7 +99,7 @@ class AIMessageRepository(BaseRepository[AIMessage, AIMessageCreate, AIMessageUp
                 workspace_file_id,
                 workspace_file:workspace_file_id(
                     id,
-                    orginal_file_name,
+                    original_file_name,
                     file_path,
                     mime_type,
                     file_size
@@ -119,7 +119,7 @@ class AIMessageRepository(BaseRepository[AIMessage, AIMessageCreate, AIMessageUp
                     wf = file_link['workspace_file']
                     files.append(MessageFile(
                         id=wf['id'],
-                        original_filename=wf['orginal_file_name'],
+                        original_filename=wf['original_file_name'],
                         file_path=wf['file_path'],
                         mime_type=wf['mime_type'],
                         file_size=wf['file_size']

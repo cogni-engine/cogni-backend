@@ -23,7 +23,7 @@ async def build_file_context(client: Client, file_ids: List[int]) -> Optional[st
     try:
         # Fetch file metadata
         response = client.table("workspace_files").select(
-            "id, orginal_file_name, file_path, mime_type, file_size"
+            "id, original_file_name, file_path, mime_type, file_size"
         ).in_("id", file_ids).execute()
         
         if not response.data:
@@ -34,7 +34,7 @@ async def build_file_context(client: Client, file_ids: List[int]) -> Optional[st
         context_parts = ["📎 User has attached the following files:\n"]
         
         for file in files:
-            filename = file.get("orginal_file_name", "unknown")
+            filename = file.get("original_file_name", "unknown")
             mime_type = file.get("mime_type", "unknown")
             file_size = file.get("file_size", 0)
             
