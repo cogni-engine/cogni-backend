@@ -38,6 +38,7 @@ class Workspace(WorkspaceBase):
     """Complete workspace model from database"""
     id: int
     created_at: datetime
+    workspace_messages_updated_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True
