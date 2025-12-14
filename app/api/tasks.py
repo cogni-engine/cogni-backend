@@ -6,6 +6,7 @@ from datetime import datetime
 from app.config import supabase
 from app.models import AINotification
 from app.models.task import Task
+from app.models.recurrence import ValidatedRecurrencePattern, OptionalRecurrencePattern
 from app.services.task import RecurringTaskService
 from app.services.task_to_notification import generate_notifications_from_task as generate_notifications_from_task_ai
 
@@ -26,7 +27,7 @@ class CreateTaskRequest(BaseModel):
     progress: Optional[int] = None
     source_note_id: Optional[int] = None
     assigner_id: Optional[str] = None
-    recurrence_pattern: str
+    recurrence_pattern: ValidatedRecurrencePattern
     is_ai_task: bool = False
     is_recurring_task_active: bool = True
     next_run_time: datetime
@@ -39,7 +40,7 @@ class UpdateTaskRequest(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     completed_at: Optional[datetime] = None
-    recurrence_pattern: Optional[str] = None
+    recurrence_pattern: OptionalRecurrencePattern = None
     is_ai_task: Optional[bool] = None
     is_recurring_task_active: Optional[bool] = None
     next_run_time: Optional[datetime] = None

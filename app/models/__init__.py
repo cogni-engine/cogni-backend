@@ -8,6 +8,13 @@ from .notification import AINotification, AINotificationCreate, AINotificationUp
 from .workspace import Workspace, WorkspaceCreate, WorkspaceUpdate, WorkspaceMember, WorkspaceMemberCreate, WorkspaceMemberUpdate
 from .user import UserProfile, UserProfileCreate, UserProfileUpdate
 from .chat import ChatRequest, ChatResponse, ChatMessage
+from .recurrence import (
+    RecurrencePattern,
+    VALID_RECURRENCE_PATTERNS,
+    validate_recurrence_pattern,
+    ValidatedRecurrencePattern,
+    OptionalRecurrencePattern,
+)
 
 __all__ = [
     'Task', 'TaskCreate', 'TaskUpdate', 'TaskResult', 'TaskResultCreate',
@@ -22,5 +29,7 @@ __all__ = [
     'UserProfile', 'UserProfileCreate', 'UserProfileUpdate',
     'ChatRequest', 'ChatResponse', 'ChatMessage',
     'TaskUpdateRequest', 'TaskUpdateResponse',
+    'RecurrencePattern', 'VALID_RECURRENCE_PATTERNS', 'validate_recurrence_pattern',
+    'ValidatedRecurrencePattern', 'OptionalRecurrencePattern',
 ]
 

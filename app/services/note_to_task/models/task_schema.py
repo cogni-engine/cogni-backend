@@ -4,12 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# 許可されたパターンの定義
-VALID_RECURRENCE_PATTERNS = {
-    "EVERY_DAY", "EVERY_WEEK", "EVERY_MONTH", "EVERY_YEAR",
-    "EVERY_MONDAY", "EVERY_TUESDAY", "EVERY_WEDNESDAY", 
-    "EVERY_THURSDAY", "EVERY_FRIDAY", "EVERY_SATURDAY", "EVERY_SUNDAY"
-}
+from app.models.recurrence import validate_recurrence_pattern
 
 
 class TaskBaseForAI(BaseModel):
@@ -38,23 +33,9 @@ class TaskBaseForAI(BaseModel):
     
     @field_validator('recurrence_pattern')
     @classmethod
-    def validate_recurrence_pattern(cls, v: Optional[str]) -> Optional[str]:
+    def validate_recurrence_pattern_field(cls, v: Optional[str]) -> Optional[str]:
         """recurrence_patternのバリデーション"""
-        if v is None:
-            return v
-        
-        # カンマ区切りで分割
-        patterns = [p.strip() for p in v.split(',')]
-        
-        # 各パターンが有効かチェック
-        for pattern in patterns:
-            if pattern not in VALID_RECURRENCE_PATTERNS:
-                raise ValueError(
-                    f"Invalid recurrence_pattern: '{pattern}'. "
-                    f"Valid patterns are: {', '.join(sorted(VALID_RECURRENCE_PATTERNS))}"
-                )
-        
-        return v
+        return validate_recurrence_pattern(v)
     
     @model_validator(mode='after')
     def validate_recurrence_fields(self):

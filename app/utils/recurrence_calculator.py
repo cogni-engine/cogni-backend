@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 from typing import Dict
 import logging
 
+from app.models.recurrence import validate_recurrence_pattern
+
 logger = logging.getLogger(__name__)
 
 # 曜日名から曜日番号へのマッピング（0=月曜日, 6=日曜日）
@@ -39,6 +41,9 @@ def calculate_next_run_time(current_time: datetime, recurrence_pattern: str) -> 
     """
     if not recurrence_pattern:
         raise ValueError("recurrence_pattern is required")
+    
+    # Validate the pattern using shared validation
+    validate_recurrence_pattern(recurrence_pattern)
     
     # パターンをカンマで分割してトリム
     patterns = [p.strip() for p in recurrence_pattern.split(",")]
