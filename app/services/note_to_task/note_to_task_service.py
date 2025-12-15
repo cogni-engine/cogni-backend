@@ -1,5 +1,5 @@
 """Note to Task AI service with LangChain"""
-from typing import List
+from typing import List, Optional
 import logging
 
 from langchain_openai import ChatOpenAI
@@ -19,7 +19,12 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 structured_llm = llm.with_structured_output(TaskListResponse)
 
 
-async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[str]) -> List[Task]:
+async def generate_tasks_from_note(
+    note_id: int, 
+    note_text: str, 
+    user_ids: List[str],
+    note_title: Optional[str] = None
+) -> List[Task]:
     """
     指定されたnoteのテキストからAIでタスクを生成してデータベースに保存する
     既存の同じnote_idから生成されたタスクは削除される
@@ -29,6 +34,7 @@ async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[
         note_id: ノートID（LLMの参照用）
         note_text: ノートのテキスト内容
         user_ids: タスクを割り当てるユーザーIDのリスト
+        note_title: ノートのタイトル（Noneの場合はテキストの最初の行から抽出）
     
     Returns:
         保存されたタスクのリスト
@@ -50,9 +56,11 @@ async def generate_tasks_from_note(note_id: int, note_text: str, user_ids: List[
     # 現在の日時を取得（日本時間）
     current_datetime = get_current_datetime_ja()
     
-    # ノートタイトルを抽出（最初の行を取得、空の場合は"Untitled"）
-    note_lines = note_text.split('\n')
-    note_title = note_lines[0].strip() if note_lines and note_lines[0].strip() else "Untitled"
+    # ノートタイトルを決定（引数で渡された場合はそれを使用、なければテキストから抽出）
+    if not note_title:
+        # Legacy fallback: extract from first line of text
+        note_lines = note_text.split('\n')
+        note_title = note_lines[0].strip() if note_lines and note_lines[0].strip() else "Untitled"
     
     # LangChain チェーンの構築と実行（1回のみ）
     result: TaskListResponse = await (prompt_template | structured_llm).ainvoke({

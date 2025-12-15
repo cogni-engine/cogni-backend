@@ -118,9 +118,12 @@ async def conversation_stream(
                     
                     # Extract source note title from notes_data passed from cogno.py
                     if notes_data:
-                        note_text = notes_data.get('text', '')
-                        note_lines = note_text.split('\n')
-                        source_note_title = note_lines[0] if note_lines else "Untitled"
+                        # Use title column if available, fallback to parsing for legacy notes
+                        source_note_title = notes_data.get('title')
+                        if not source_note_title:
+                            note_text = notes_data.get('text', '')
+                            note_lines = note_text.split('\n')
+                            source_note_title = note_lines[0] if note_lines else "Untitled"
                         logger.info(f"Source note title: {source_note_title}")
                 
                 if source_note_id:

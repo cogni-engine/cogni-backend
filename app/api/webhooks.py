@@ -114,7 +114,7 @@ async def _process_notes_sync(
                         return {"status": "skipped", "note_id": note.id, "reason": "no_assignees"}
                 
                 # ノート→タスク生成（1回のLLM呼び出しで全user_ids分のタスク生成）
-                tasks = await generate_tasks_from_note(note.id, note.text, user_ids)
+                tasks = await generate_tasks_from_note(note.id, note.text, user_ids, note.title)
                 tasks_count = len(tasks)
                 total_tasks_generated += tasks_count
                 
