@@ -13,7 +13,7 @@ from app.models.notification import AINotificationCreate
 from app.models.task_result import TaskResultCreate
 from app.utils.recurrence_calculator import calculate_next_run_time
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 import logging
 
@@ -93,28 +93,29 @@ async def _process_notes_sync(
                 if not note.text:
                     return {"status": "skipped", "note_id": note.id, "reason": "empty_text"}
                 
-                # workspace typeに応じてuser_idsを取得
-                user_ids = []
+                # workspace typeに応じて(user_id, workspace_member_id)ペアを取得
+                user_workspace_member_pairs: List[Tuple[str, Optional[int]]] = []
                 
                 if workspace.type == "personal":
-                    # personal workspaceの場合: オーナーのuser_idを取得
+                    # personal workspaceの場合: オーナーのuser_idとworkspace_member_idを取得
                     workspace_member_repo = WorkspaceMemberRepository(supabase)
                     members = await workspace_member_repo.find_by_workspace(note.workspace_id)
                     
                     if not members:
                         return {"status": "error", "note_id": note.id, "reason": "no_workspace_members"}
                     
-                    user_ids = [members[0].user_id]
+                    user_workspace_member_pairs = [(members[0].user_id, members[0].id)]
                     
                 elif workspace.type == "group":
-                    # group workspaceの場合: assigneeのuser_idsを取得
-                    user_ids = await note_repo.get_note_assignee_user_ids(note.id)
+                    # group workspaceの場合: assigneeの(user_id, workspace_member_id)ペアを取得
+                    pairs = await note_repo.get_note_assignee_user_and_member_ids(note.id)
+                    user_workspace_member_pairs = [(user_id, workspace_member_id) for user_id, workspace_member_id in pairs]
                     
-                    if not user_ids:
+                    if not user_workspace_member_pairs:
                         return {"status": "skipped", "note_id": note.id, "reason": "no_assignees"}
                 
-                # ノート→タスク生成（1回のLLM呼び出しで全user_ids分のタスク生成）
-                tasks = await generate_tasks_from_note(note.id, note.text, user_ids, note.title)
+                # ノート→タスク生成（1回のLLM呼び出しで全ペア分のタスク生成）
+                tasks = await generate_tasks_from_note(note.id, note.text, user_workspace_member_pairs, note.title)
                 tasks_count = len(tasks)
                 total_tasks_generated += tasks_count
                 
@@ -265,6 +266,7 @@ async def process_recurring_tasks():
                 logger.info(f"✅ Task {task_id}: Updated next_run_time from {old_next_run_time} to {new_next_run_time}")
                 
                 # is_recurring_task_active=Trueの場合のみ、通知を複製
+                existing_notifications = []
                 if is_active:
                     # 既存の通知を取得
                     existing_notifications = await notification_repo.find_by_filters({"task_id": task_id})
@@ -286,6 +288,7 @@ async def process_recurring_tasks():
                                 due_date=new_due_date,
                                 task_id=task_id,
                                 user_id=notification.user_id,
+                                workspace_member_id=notification.workspace_member_id,
                                 status=notification.status
                             )
                             

@@ -37,6 +37,7 @@ class TaskCreate(TaskBase):
     """Task creation model"""
     user_id: str   # UUID as string
     assigner_id: Optional[str] = None
+    workspace_member_id: Optional[int] = None
 
 
 class TaskUpdate(BaseModel):
@@ -62,6 +63,7 @@ class Task(TaskBase):
     completed_at: Optional[datetime] = None
     user_id: str
     assigner_id: Optional[str] = None
+    workspace_member_id: Optional[int] = None
     recurrence_pattern: Optional[str] = None
     is_ai_task: bool = False
     is_recurring_task_active: bool = True

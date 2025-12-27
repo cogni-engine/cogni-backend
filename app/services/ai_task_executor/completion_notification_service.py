@@ -53,6 +53,7 @@ async def generate_completion_notification(
             due_date=due_date,
             task_id=task.id,
             user_id=task.user_id,
+            workspace_member_id=task.workspace_member_id,
             status=NotificationStatus.SCHEDULED
         )
         
@@ -69,6 +70,7 @@ async def generate_completion_notification(
             due_date=due_date,
             task_id=task.id,
             user_id=task.user_id,
+            workspace_member_id=task.workspace_member_id,
             status=NotificationStatus.SCHEDULED
         )
 

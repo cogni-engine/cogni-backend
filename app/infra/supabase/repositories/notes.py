@@ -1,6 +1,6 @@
 """Notes repository"""
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from supabase import Client  # type: ignore
 
@@ -81,3 +81,17 @@ class NoteRepository(BaseRepository[Note, NoteCreate, NoteUpdate]):
             .execute()
         )
         return [item["workspace_member"]["user_id"] for item in response.data]
+    
+    async def get_note_assignee_user_and_member_ids(self, note_id: int) -> List[Tuple[str, int]]:
+        """Get (user_id, workspace_member_id) tuples for all assignees of a note"""
+        response = (
+            self._client.table("workspace_member_note")
+            .select("workspace_member_id, workspace_member!inner(user_id)")
+            .eq("note_id", note_id)
+            .eq("workspace_member_note_role", "assignee")
+            .execute()
+        )
+        return [
+            (item["workspace_member"]["user_id"], item["workspace_member_id"])
+            for item in response.data
+        ]
