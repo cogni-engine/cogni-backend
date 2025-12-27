@@ -1,5 +1,5 @@
 """Note to Task AI service with LangChain"""
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 
 from langchain_openai import ChatOpenAI
@@ -22,18 +22,18 @@ structured_llm = llm.with_structured_output(TaskListResponse)
 async def generate_tasks_from_note(
     note_id: int, 
     note_text: str, 
-    user_ids: List[str],
+    user_workspace_member_pairs: List[Tuple[str, Optional[int]]],
     note_title: Optional[str] = None
 ) -> List[Task]:
     """
     指定されたnoteのテキストからAIでタスクを生成してデータベースに保存する
     既存の同じnote_idから生成されたタスクは削除される
-    複数のuser_idsが指定された場合、同じタスクが各ユーザーに割り当てられる
+    複数の(user_id, workspace_member_id)ペアが指定された場合、同じタスクが各ユーザーに割り当てられる
     
     Args:
         note_id: ノートID（LLMの参照用）
         note_text: ノートのテキスト内容
-        user_ids: タスクを割り当てるユーザーIDのリスト
+        user_workspace_member_pairs: (user_id, workspace_member_id)のタプルのリスト
         note_title: ノートのタイトル（Noneの場合はテキストの最初の行から抽出）
     
     Returns:
@@ -43,8 +43,8 @@ async def generate_tasks_from_note(
     if not note_text:
         return []
     
-    # user_idsが空の場合は空リストを返す
-    if not user_ids:
+    # user_workspace_member_pairsが空の場合は空リストを返す
+    if not user_workspace_member_pairs:
         return []
     
     # 既存の同じnote_idから生成されたタスクを削除
@@ -72,11 +72,11 @@ async def generate_tasks_from_note(
 
     print(f"🕐 result: {result}")
     # TaskRepositoryでタスクを保存
-    # 各タスク × 各user_idで保存
+    # 各タスク × 各(user_id, workspace_member_id)ペアで保存
     saved_tasks: List[Task] = []
     
     for task in result.tasks:
-        for user_id in user_ids:
+        for user_id, workspace_member_id in user_workspace_member_pairs:
             # タスクデータを取得
             task_data = task.model_dump(exclude={'source_note_id'})
             
@@ -93,13 +93,14 @@ async def generate_tasks_from_note(
             
             task_create = TaskCreate(
                 user_id=user_id,
+                workspace_member_id=workspace_member_id,
                 source_note_id=note_id,
                 **task_data
             )
             try:
                 saved_task = await task_repo.create(task_create)
                 saved_tasks.append(saved_task)
-                logger.info(f"Task saved successfully: {saved_task.id} - {saved_task.title} (user: {user_id})")
+                logger.info(f"Task saved successfully: {saved_task.id} - {saved_task.title} (user: {user_id}, workspace_member: {workspace_member_id})")
             except Exception as e:
                 logger.error(f"Failed to save task: {task_create.title} for user {user_id}. Error: {e}")
                 # 失敗したタスクはスキップして続行

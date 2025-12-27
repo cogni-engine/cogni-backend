@@ -78,6 +78,7 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
                 due_date=notif.due_date,
                 task_id=task.id,
                 user_id=task.user_id,
+                workspace_member_id=task.workspace_member_id,
                 status=NotificationStatus.SCHEDULED
             )
         )
@@ -173,6 +174,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
                     due_date=notif.due_date,
                     task_id=primary_task.id,
                     user_id=user_id,
+                    workspace_member_id=primary_task.workspace_member_id,
                     status=NotificationStatus.SCHEDULED
                 )
                 saved_notification = await notification_repo.create(notification_create)
