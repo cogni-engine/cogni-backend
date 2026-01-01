@@ -10,7 +10,7 @@ logging.basicConfig(
 
 from fastapi import FastAPI, APIRouter  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from app.api import cogno, notes, tasks, webhooks, push_notifications  # noqa: E402
+from app.api import cogno, notes, tasks, webhooks, push_notifications, users  # noqa: E402
 
 app = FastAPI(
     title="Cogni Backend API",
@@ -34,6 +34,7 @@ api_router.include_router(notes.router)
 api_router.include_router(tasks.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(push_notifications.router)
+api_router.include_router(users.router)
 
 # Include all API routes
 app.include_router(api_router)
