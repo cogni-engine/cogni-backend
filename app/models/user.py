@@ -17,12 +17,14 @@ class UserProfileCreate(UserProfileBase):
 class UserProfileUpdate(BaseModel):
     """User profile update model"""
     user_name: Optional[str] = None
+    deleted_at: Optional[datetime] = None
 
 
 class UserProfile(UserProfileBase):
     """Complete user profile model from database"""
     id: str  # UUID as string
     created_at: datetime
+    deleted_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

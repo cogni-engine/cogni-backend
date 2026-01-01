@@ -18,6 +18,7 @@ python-dotenv = "*"
 pydantic = "^2.0"
 httpx = "*"
 croniter = "*"
+python-jose = {extras = ["cryptography"], version = "*"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
