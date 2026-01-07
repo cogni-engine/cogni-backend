@@ -1,5 +1,9 @@
 """AI Note Editor Service"""
-from .note_ai_editor_service import edit_note_with_ai
+from .note_ai_editor_service import (
+    get_ai_suggestions
+)
 
-__all__ = ["edit_note_with_ai"]
+__all__ = [
+    "get_ai_suggestions",
+]
 
