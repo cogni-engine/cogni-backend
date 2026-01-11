@@ -459,7 +459,8 @@ async def _execute_ai_tasks_common(
                             task=task,
                             result_title=result_title,
                             result_text=result_text,
-                            due_date=due_date
+                            due_date=due_date,
+                            task_result_id=saved_result.id
                         )
                         
                         # 通知を保存
