@@ -36,6 +36,7 @@ class AINotificationBase(BaseModel):
     body: Optional[str] = None
     due_date: datetime
     task_id: int
+    task_result_id: Optional[int] = None
     user_id: str  # UUID as string
     workspace_member_id: Optional[int] = None
     status: NotificationStatus = NotificationStatus.SCHEDULED

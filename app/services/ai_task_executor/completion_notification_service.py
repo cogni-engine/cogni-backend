@@ -21,7 +21,8 @@ async def generate_completion_notification(
     task: Task,
     result_title: str,
     result_text: str,
-    due_date: datetime
+    due_date: datetime,
+    task_result_id: int
 ) -> AINotificationCreate:
     """
     AIタスク実行完了後の通知を生成する
@@ -31,6 +32,7 @@ async def generate_completion_notification(
         result_title: 実行結果のタイトル
         result_text: 実行結果の詳細
         due_date: 通知の送信日時（next_run_timeまたはdeadline）
+        task_result_id: 関連するtask_resultのID
     
     Returns:
         AINotificationCreate: 生成された通知
@@ -52,6 +54,7 @@ async def generate_completion_notification(
             body=result.body,
             due_date=due_date,
             task_id=task.id,
+            task_result_id=task_result_id,
             user_id=task.user_id,
             workspace_member_id=task.workspace_member_id,
             status=NotificationStatus.SCHEDULED
@@ -69,6 +72,7 @@ async def generate_completion_notification(
             body=f"{task.title}の実行が完了しました。",
             due_date=due_date,
             task_id=task.id,
+            task_result_id=task_result_id,
             user_id=task.user_id,
             workspace_member_id=task.workspace_member_id,
             status=NotificationStatus.SCHEDULED
