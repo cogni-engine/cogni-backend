@@ -82,25 +82,32 @@ async def get_jwks() -> dict:
 
 async def verify_token(token: str) -> dict:
     """
-    Verify a Supabase JWT token
+    Verify a Supabase JWT token using JWKS (public keys).
+    Supports modern Supabase JWT signing algorithms:
+    - ES256 (ECDSA with SHA-256) - Recommended
+    - RS256 (RSA with SHA-256) - Legacy support
+    
     Returns the decoded JWT payload
     Raises HTTPException if verification fails
     """
     try:
-        # Get JWKS
+        # Get JWKS (public keys from Supabase)
         jwks = await get_jwks()
         
-        # Decode token header to get key ID
+        # Decode token header to get algorithm and key ID
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
+        alg = unverified_header.get("alg", "ES256")
+        
+        logger.debug(f"Verifying token with {alg} algorithm using JWKS")
         
         if not kid:
             raise HTTPException(
                 status_code=401,
-                detail="Token missing key ID"
+                detail="Token missing key ID (kid)"
             )
         
-        # Find the key in JWKS
+        # Find the matching key in JWKS
         key_data = None
         for jwk_key in jwks.get("keys", []):
             if jwk_key.get("kid") == kid:
@@ -110,18 +117,18 @@ async def verify_token(token: str) -> dict:
         if not key_data:
             raise HTTPException(
                 status_code=401,
-                detail="Key not found in JWKS"
+                detail=f"Key with ID '{kid}' not found in JWKS"
             )
         
-        # Construct the key object from JWK
+        # Construct the key object from JWK (works for both ES256 and RS256)
         key = jwk.construct(key_data)
         
-        # Verify and decode the token
+        # Verify and decode the token with supported algorithms
         issuer = get_jwt_issuer()
         payload = jwt.decode(
             token,
             key,
-            algorithms=["RS256"],
+            algorithms=["ES256", "RS256"],  # Support both ECDSA and RSA
             audience=JWT_AUDIENCE,
             issuer=issuer,
         )

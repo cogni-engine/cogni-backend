@@ -22,6 +22,8 @@ python-jose = {extras = ["cryptography"], version = "*"}
 stripe = "*"
 email-validator = "*"
 cryptography = "*"
+sqlalchemy = "^2.0"
+psycopg2-binary = "^2.9"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
