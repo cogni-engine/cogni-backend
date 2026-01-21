@@ -19,6 +19,9 @@ pydantic = "^2.0"
 httpx = "*"
 croniter = "*"
 python-jose = {extras = ["cryptography"], version = "*"}
+stripe = "*"
+email-validator = "*"
+cryptography = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

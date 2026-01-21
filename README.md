@@ -100,6 +100,21 @@ poetry install
 Copy the example environment file and fill in your values:
 ```bash
 cp .env.example .env
+# Supabase
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# OpenAI
+OPENAI_API_KEY=your-openai-api-key
+
+# Frontend URL (for CORS and Stripe redirects)
+CLIENT_URL=http://localhost:3000
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_xxxxx
+STRIPE_WEBHOOK_SECRET=whsec_xxxxx
+STRIPE_PRICE_ID_PRO=price_xxxxx           # Pro plan price ID
+STRIPE_PRICE_ID_BUSINESS=price_xxxxx      # Business plan price ID
 ```
 
 Then edit `.env` and fill in your actual values:
@@ -108,6 +123,12 @@ Then edit `.env` and fill in your actual values:
 - `OPENAI_API_KEY` - Your OpenAI API key (from https://platform.openai.com/api-keys)
 - `WEBHOOK_SECRET` - Optional, for webhook verification
 - `CLIENT_URL` - Optional, for CORS configuration (default: http://localhost:3000)
+
+**Important**: Make sure to configure Business plan price in Stripe with:
+- Billing: Recurring
+- Usage type: Licensed
+- Quantity: Used for per-seat pricing
+- Proration: Enabled
 
 ### Running the Application
 
@@ -172,7 +193,54 @@ completed = await task_repo.mark_completed(task.id)
 
 ## API Endpoints
 
-All endpoints are prefixed with `/api`.
+### Billing & Subscriptions
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| POST | `/api/billing/purchase` | 🆕 Universal plan purchase (Pro/Business) | ✅ JWT |
+| POST | `/api/billing/portal-session` | 🆕 Create Stripe Customer Portal session | ✅ JWT |
+| POST | `/api/billing/pro/purchase` | Create Pro plan checkout session (legacy) | ❌ |
+| POST | `/api/billing/upgrade-to-business` | Upgrade from Pro to Business plan | ❌ |
+| POST | `/api/billing/sync-seats` | Sync subscription seats with member count | ❌ |
+| POST | `/api/billing/update-seats` | Manually update subscription seats | ❌ |
+
+**Key Features:**
+- ✅ **Universal Purchase**: Single endpoint for Pro/Business, existing/new orgs
+- ✅ **JWT Authentication**: Secure endpoints with Supabase JWT validation
+- ✅ **Customer Portal**: Self-service subscription management (cancel, payment, invoices)
+- ✅ **Pro → Business Upgrade**: One-click upgrade with automatic proration
+- ✅ **Auto-Seat Management**: Automatically increase seats when members join
+- ✅ **Webhook-driven**: All subscription updates processed via Stripe webhooks
+- ✅ **Industry Standard**: Same approach as Slack, Linear, Notion
+
+**Authentication:**
+New endpoints require JWT authentication. Include the Supabase JWT token in the Authorization header:
+```bash
+Authorization: Bearer <supabase_jwt_token>
+```
+
+### Stripe Webhooks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/stripe/webhook` | Handle Stripe webhook events |
+
+**Supported Events:**
+- `checkout.session.completed` - Initial checkout completion
+- `customer.subscription.updated` - Plan/seat changes, cancellations
+- `customer.subscription.deleted` - Subscription deletion
+- `invoice.payment_succeeded` - Renewal success, period updates
+- `invoice.payment_failed` - Payment failures
+
+### Tasks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/tasks` | List all tasks |
+| GET | `/tasks/{task_id}` | Get task by ID |
+| POST | `/tasks` | Create new task |
+| PUT | `/tasks/{task_id}` | Update task |
+| DELETE | `/tasks/{task_id}` | Delete task |
+| POST | `/tasks/{task_id}/complete` | Mark task complete |
+| GET | `/tasks/user/{user_id}/pending` | Get pending tasks |
+| GET | `/tasks/user/{user_id}/overdue` | Get overdue tasks |
 
 ### Cogno AI (`/api/cogno`)
 | Method | Endpoint | Description |
