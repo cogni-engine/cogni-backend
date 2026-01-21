@@ -20,3 +20,9 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 # Client URL for CORS
 CLIENT_URL = os.getenv("CLIENT_URL", "http://localhost:3000")
 
+# Stripe configuration
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_ID_PRO = os.getenv("STRIPE_PRICE_ID_PRO", "")
+STRIPE_PRICE_ID_BUSINESS = os.getenv("STRIPE_PRICE_ID_BUSINESS", "")
+
