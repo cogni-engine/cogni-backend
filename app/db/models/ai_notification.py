@@ -16,6 +16,14 @@ class NotificationStatus(str, enum.Enum):
     RESOLVED = "resolved"
 
 
+class ReactionStatus(str, enum.Enum):
+    """Reaction status enum for user reactions to notifications"""
+    NONE = "None"
+    COMPLETED = "completed"
+    POSTPONED = "postponed"
+    DISMISSED = "dismissed"
+
+
 class AINotification(Base):
     """
     SQLAlchemy ORM model for the ai_notifications table.
@@ -60,6 +68,15 @@ class AINotification(Base):
         nullable=False,
         index=True
     )
+    
+    # User reaction
+    reaction_status = Column(
+        String,
+        default="None",
+        nullable=False,
+        index=True
+    )
+    reaction_text = Column(Text, nullable=True)
     
     # Timestamps
     created_at = Column(

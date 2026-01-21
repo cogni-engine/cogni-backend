@@ -14,6 +14,14 @@ class NotificationStatus(str, Enum):
     RESOLVED = "resolved"
 
 
+class ReactionStatus(str, Enum):
+    """Reaction status enum for user reactions to notifications"""
+    NONE = "None"
+    COMPLETED = "completed"
+    POSTPONED = "postponed"
+    DISMISSED = "dismissed"
+
+
 class TaskResult(BaseModel):
     """Task result model (embedded in notification response)"""
     id: int
@@ -38,6 +46,8 @@ class AINotificationBase(BaseModel):
     user_id: UUID | str  # Accept both UUID and string
     workspace_member_id: Optional[int] = None
     status: NotificationStatus = NotificationStatus.SCHEDULED
+    reaction_status: ReactionStatus = ReactionStatus.NONE
+    reaction_text: Optional[str] = None
     
     @field_serializer('user_id')
     def serialize_user_id(self, user_id: UUID | str) -> str:
@@ -68,3 +78,27 @@ class AINotification(AINotificationBase):
     
     class Config:
         from_attributes = True
+
+
+class CompleteNotificationRequest(BaseModel):
+    """Request model for completing a notification"""
+    pass  # Empty since notification_id comes from path
+
+
+class CompleteNotificationResponse(BaseModel):
+    """Response model for notification completion"""
+    completed_notification_id: int
+    resolved_notification_ids: list[int]
+    message: str
+
+
+class PostponeNotificationRequest(BaseModel):
+    """Request model for postponing a notification"""
+    reaction_text: str
+
+
+class PostponeNotificationResponse(BaseModel):
+    """Response model for notification postponement"""
+    postponed_notification_id: int
+    resolved_notification_ids: list[int]
+    message: str
