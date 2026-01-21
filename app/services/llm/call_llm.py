@@ -1,8 +1,7 @@
 # pyproject.toml: add langchain-openai
 
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage, AIMessage
-from langchain_core.messages import HumanMessage as CoreHumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from typing import List, Dict, Type, TypeVar, cast, AsyncGenerator, Any, Union
 from pydantic import BaseModel
 
@@ -60,8 +59,8 @@ class LLMService:
             elif role == "user":
                 # For user messages, content might be an array (for vision)
                 if isinstance(content, list):
-                    # Use CoreHumanMessage which supports content arrays
-                    lc_messages.append(CoreHumanMessage(content=content))
+                    # HumanMessage supports content arrays
+                    lc_messages.append(HumanMessage(content=content))
                 else:
                     lc_messages.append(HumanMessage(content=content))
             else:  # assistant
