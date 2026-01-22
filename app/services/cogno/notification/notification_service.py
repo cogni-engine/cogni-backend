@@ -113,7 +113,7 @@ async def daily_notification_check(workspace_id: int) -> None:
         # Use LLM to summarize notifications into natural language
         summary_prompt = build_daily_summary_prompt(all_notifications)
         
-        llm_service = LLMService(model="gpt-4o", temperature=0.7)
+        llm_service = LLMService(model="gpt-5-mini", temperature=0.7)
         messages = [{"role": "user", "content": summary_prompt}]
         
         # Get summary (non-streaming)

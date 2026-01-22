@@ -17,7 +17,7 @@ from .prompts import task_prompt_template, notification_prompt_template
 logger = logging.getLogger(__name__)
 
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
+llm = ChatOpenAI(model="gpt-5-mini", temperature=0.7)
 
 async def generate_tutorial_task_and_notification(
     onboarding_session_id: str,

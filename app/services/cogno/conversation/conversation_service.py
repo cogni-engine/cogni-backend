@@ -23,7 +23,7 @@ class MessageLike(Protocol):
     content: str
     files: Optional[List[Any]]
 
-STREAM_CHAT_MODEL = "chatgpt-4o-latest"
+STREAM_CHAT_MODEL = "gpt-5.1-chat-latest"
 
 
 async def conversation_stream(

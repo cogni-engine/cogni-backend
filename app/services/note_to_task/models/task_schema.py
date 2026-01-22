@@ -17,11 +17,18 @@ class TaskBaseForAI(BaseModel):
                     "（Noteに書かれた内容を一言一句そのまま全て転記。抜け漏れ厳禁）"
                     "\n\n【理由・目的】\n"
                     "（なぜこのタスクを実行するのか）"
+                    "\n\n【ユーザーの意図・推測】\n"
+                    "（ユーザーが何をしようとしているのか、Noteの内容から推測される目的や意図）"
+                    "\n\n【AIがやるべきこと・できること】\n"
+                    "（このタスクにおいて、AIが実行できること、事前に準備できること、支援できること。"
+                    "情報収集、調査、原案作成、データ整理、要約、分析など、AIができることを具体的に列挙する。"
+                    "AIができることがない場合は「なし」と明記する）"
                     "\n\n【方法・手順】\n"
                     "（どのようにこのタスクを実行するのか。できれば複数のアプローチや手段を提示する）"
                     "\n\n"
                     "長くなることは推奨される。どんな言語で書かれていてもその言語のまま全て含める。"
                     "情報を省略・要約してはいけない。"
+                    
     )
     deadline: Optional[datetime] = Field(None, description="期限（ISO形式: 2024-10-15T00:00:00）")
     status: Optional[str] = Field("pending", description="ステータス（pending または completed のいずれか）")
@@ -29,7 +36,7 @@ class TaskBaseForAI(BaseModel):
     source_note_id: int = Field(description="元となったNoteのID（必須）")
     recurrence_pattern: Optional[str] = Field(None, description="定期実行のパターン（EVERY_DAY, EVERY_WEEK, EVERY_MONTH, EVERY_YEAR, EVERY_MONDAY, EVERY_TUESDAY, EVERY_WEDNESDAY, EVERY_THURSDAY, EVERY_FRIDAY, EVERY_SATURDAY, EVERY_SUNDAY）。複数曜日の場合はカンマ区切り。定期的に実行するタスクの場合のみ指定")
     next_run_time: Optional[datetime] = Field(None, description="次の実行時刻（ISO形式: 2024-10-15T00:00:00）。定期的に実行するタスクの場合のみ指定")
-    is_ai_task: bool = Field(False, description="AIが自動実行するタスクかどうか。true=AIが実行、false=人間が実行")
+    is_ai_task: bool = Field(True, description="AIが自動実行するタスクかどうか。AIができることがある場合はtrue、AIができることが全くない場合のみfalseを設定する")
     
     @field_validator('recurrence_pattern')
     @classmethod

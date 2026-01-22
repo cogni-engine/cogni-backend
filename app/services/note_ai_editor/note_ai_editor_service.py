@@ -15,7 +15,7 @@ from .types import AISuggestionDict
 logger = logging.getLogger(__name__)
 
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+llm = ChatOpenAI(model="gpt-5-mini", temperature=0.3)
 
 
 

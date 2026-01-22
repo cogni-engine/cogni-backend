@@ -8,12 +8,12 @@ from pydantic import BaseModel
 T = TypeVar('T', bound=BaseModel)
 
 class LLMService:
-    def __init__(self, model: str = "gpt-4o", temperature: float = 0.7):
+    def __init__(self, model: str = "gpt-5-mini", temperature: float = 0.7):
         """
         Initialize LLM Service.
         
         Args:
-            model: Model name to use (default: "gpt-4o")
+            model: Model name to use (default: "gpt-5-mini")
             temperature: Sampling temperature (default: 0.7)
         """
         self.llm = ChatOpenAI(
