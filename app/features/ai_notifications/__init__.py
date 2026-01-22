@@ -14,6 +14,9 @@ from app.features.ai_notifications.domain import (
     CompleteNotificationResponse,
     PostponeNotificationRequest,
     PostponeNotificationResponse,
+    ReactedAINotification,
+    NoteInfo,
+    UserInfo,
 )
 
 __all__ = [
@@ -30,4 +33,7 @@ __all__ = [
     "CompleteNotificationResponse",
     "PostponeNotificationRequest",
     "PostponeNotificationResponse",
+    "ReactedAINotification",
+    "NoteInfo",
+    "UserInfo",
 ]

@@ -102,3 +102,46 @@ class PostponeNotificationResponse(BaseModel):
     postponed_notification_id: int
     resolved_notification_ids: list[int]
     message: str
+
+
+class NoteInfo(BaseModel):
+    """Note information for reacted notifications"""
+    id: int
+    title: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class UserInfo(BaseModel):
+    """User information for reacted notifications"""
+    id: str  # UUID as string
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ReactedAINotification(BaseModel):
+    """AI Notification with note and user information for reacted notifications"""
+    id: int
+    title: str
+    ai_context: str
+    body: Optional[str] = None
+    due_date: datetime
+    task_id: int
+    user_id: str  # UUID as string
+    workspace_member_id: Optional[int] = None
+    status: NotificationStatus
+    reaction_status: ReactionStatus
+    reaction_text: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    
+    # Joined data
+    note: Optional[NoteInfo] = None
+    user: Optional[UserInfo] = None
+    
+    class Config:
+        from_attributes = True

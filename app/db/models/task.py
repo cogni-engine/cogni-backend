@@ -35,7 +35,6 @@ class Task(Base):
     recurrence_pattern = Column(String, nullable=True)
     next_run_time = Column(DateTime(timezone=True), nullable=True)
     is_recurring_task_active = Column(Boolean, default=True, nullable=True)
-    last_recurring_at = Column(DateTime(timezone=True), nullable=True)
     
     # AI task flag
     is_ai_task = Column(Boolean, default=False, nullable=True)

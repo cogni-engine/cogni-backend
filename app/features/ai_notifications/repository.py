@@ -1,11 +1,11 @@
 """SQLAlchemy repository for AI Notifications"""
 
+import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from uuid import UUID
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
-from sqlalchemy.sql import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, or_, func, select, cast, String
 
 # SQLAlchemy ORM models
 from app.db.models.ai_notification import (
@@ -14,24 +14,30 @@ from app.db.models.ai_notification import (
     ReactionStatus
 )
 from app.db.models.task_result import TaskResult as TaskResultORM
+from app.db.models.task import Task as TaskORM
+from app.db.models.note import Note as NoteORM
+from app.db.models.workspace_member import WorkspaceMember as WorkspaceMemberORM
+from app.db.models.user_profile import UserProfile as UserProfileORM
 
 # Pydantic domain models (feature-local)
-from app.features.ai_notifications.domain import AINotification
+from app.features.ai_notifications.domain import AINotification, ReactedAINotification, NoteInfo, UserInfo
+
+logger = logging.getLogger(__name__)
 
 
 class AINotificationRepository:
     """Repository for AI Notification operations using SQLAlchemy"""
     
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         """
         Initialize the repository with a database session.
         
         Args:
-            db: SQLAlchemy database session
+            db: SQLAlchemy async database session
         """
         self.db = db
     
-    def get_past_due_notifications_for_user(
+    async def get_past_due_notifications_for_user(
         self, 
         user_id: UUID | str,
         current_time: datetime | None = None
@@ -51,17 +57,6 @@ class AINotificationRepository:
         Returns:
             List of past AINotification domain models (Pydantic), 
             ordered by due_date (oldest first)
-            
-        Example:
-            ```python
-            from app.db import get_db
-            from app.features.ai_notifications import AINotificationRepository
-            
-            db = next(get_db())
-            repo = AINotificationRepository(db)
-            past_due = repo.get_past_due_notifications_for_user(user_id)
-            # Returns Pydantic AINotification objects that need user action
-            ```
         """
         if current_time is None:
             current_time = datetime.now()
@@ -87,30 +82,25 @@ class AINotificationRepository:
                     AINotificationORM.due_date < current_time,
                     AINotificationORM.task_result_id.is_(None),
                     AINotificationORM.status != "resolved",
-                    AINotificationORM.reaction_status == "None"
+                    cast(AINotificationORM.reaction_status, String) == "None"
                 )
             )
             .group_by(AINotificationORM.task_id)
             .subquery()
         )
         
-        # Main query with conditions:
-        # - Include notifications WITH task_result_id, OR
-        # - Include notifications that match the subquery (most recent per task without result)
-        # - EXCLUDE resolved notifications or notifications with reactions
-        orm_notifications = (
-            self.db.query(AINotificationORM)
+        # Main query with conditions
+        stmt = (
+            select(AINotificationORM)
             .outerjoin(TaskResultORM, AINotificationORM.task_result_id == TaskResultORM.id)
-            .filter(
+            .where(
                 and_(
                     AINotificationORM.user_id == user_id,
                     AINotificationORM.due_date < current_time,
                     AINotificationORM.status != "resolved",
-                    AINotificationORM.reaction_status == "None",
+                    cast(AINotificationORM.reaction_status, String) == "None",
                     or_(
-                        # Include if it has a task_result
                         AINotificationORM.task_result_id.isnot(None),
-                        # OR if it's the most recent notification for this task without result
                         and_(
                             AINotificationORM.task_id == subquery.c.task_id,
                             AINotificationORM.id == subquery.c.max_id
@@ -118,11 +108,12 @@ class AINotificationRepository:
                     )
                 )
             )
-            .order_by(AINotificationORM.due_date.asc())  # Oldest first
-            .all()
+            .order_by(AINotificationORM.due_date.asc())
         )
+        result = await self.db.execute(stmt)
+        orm_notifications = result.scalars().all()
         
-        # Convert SQLAlchemy ORM models to Pydantic domain models
+        # Convert to domain models
         domain_notifications = [
             self._to_domain_model(orm_notification)
             for orm_notification in orm_notifications
@@ -130,7 +121,7 @@ class AINotificationRepository:
         
         return domain_notifications
     
-    def get_notification_by_id(
+    async def get_notification_by_id(
         self, 
         notification_id: int,
         user_id: UUID | str
@@ -148,23 +139,24 @@ class AINotificationRepository:
         if isinstance(user_id, str):
             user_id = UUID(user_id)
         
-        orm_notification = (
-            self.db.query(AINotificationORM)
-            .filter(
+        stmt = (
+            select(AINotificationORM)
+            .where(
                 and_(
                     AINotificationORM.id == notification_id,
                     AINotificationORM.user_id == user_id
                 )
             )
-            .first()
         )
+        result = await self.db.execute(stmt)
+        orm_notification = result.scalar_one_or_none()
         
         if not orm_notification:
             return None
         
         return self._to_domain_model(orm_notification)
     
-    def complete_notification_and_resolve_previous(
+    async def complete_notification_and_resolve_previous(
         self,
         notification_id: int,
         user_id: UUID | str
@@ -190,17 +182,18 @@ class AINotificationRepository:
             user_id = UUID(user_id)
         
         # Get the target notification (with row-level lock for consistency)
-        target_notification = (
-            self.db.query(AINotificationORM)
-            .filter(
+        stmt = (
+            select(AINotificationORM)
+            .where(
                 and_(
                     AINotificationORM.id == notification_id,
                     AINotificationORM.user_id == user_id
                 )
             )
             .with_for_update()
-            .first()
         )
+        result = await self.db.execute(stmt)
+        target_notification = result.scalar_one_or_none()
         
         if not target_notification:
             raise ValueError(f"Notification {notification_id} not found or access denied")
@@ -214,9 +207,9 @@ class AINotificationRepository:
         
         # Find all notifications from the same task with due_date <= target's due_date
         # excluding the target itself (it's already set to completed)
-        previous_notifications = (
-            self.db.query(AINotificationORM)
-            .filter(
+        stmt_previous = (
+            select(AINotificationORM)
+            .where(
                 and_(
                     AINotificationORM.task_id == task_id,
                     AINotificationORM.user_id == user_id,
@@ -226,8 +219,9 @@ class AINotificationRepository:
                     AINotificationORM.status != "resolved"
                 )
             )
-            .all()
         )
+        result_previous = await self.db.execute(stmt_previous)
+        previous_notifications = result_previous.scalars().all()
         
         # Update all previous notifications' status to "resolved"
         resolved_ids = []
@@ -236,11 +230,11 @@ class AINotificationRepository:
             resolved_ids.append(notification.id)
         
         # Commit the transaction (I/O happens here)
-        self.db.commit()
+        await self.db.commit()
         
         return (notification_id, resolved_ids)
     
-    def postpone_notification_and_resolve_previous(
+    async def postpone_notification_and_resolve_previous(
         self,
         notification_id: int,
         user_id: UUID | str,
@@ -269,17 +263,18 @@ class AINotificationRepository:
             user_id = UUID(user_id)
         
         # Get the target notification (with row-level lock for consistency)
-        target_notification = (
-            self.db.query(AINotificationORM)
-            .filter(
+        stmt = (
+            select(AINotificationORM)
+            .where(
                 and_(
                     AINotificationORM.id == notification_id,
                     AINotificationORM.user_id == user_id
                 )
             )
             .with_for_update()
-            .first()
         )
+        result = await self.db.execute(stmt)
+        target_notification = result.scalar_one_or_none()
         
         if not target_notification:
             raise ValueError(f"Notification {notification_id} not found or access denied")
@@ -294,9 +289,9 @@ class AINotificationRepository:
         
         # Find all notifications from the same task with due_date <= target's due_date
         # excluding the target itself (it's already set to postponed)
-        previous_notifications = (
-            self.db.query(AINotificationORM)
-            .filter(
+        stmt_previous = (
+            select(AINotificationORM)
+            .where(
                 and_(
                     AINotificationORM.task_id == task_id,
                     AINotificationORM.user_id == user_id,
@@ -306,8 +301,9 @@ class AINotificationRepository:
                     AINotificationORM.status != "resolved"
                 )
             )
-            .all()
         )
+        result_previous = await self.db.execute(stmt_previous)
+        previous_notifications = result_previous.scalars().all()
         
         # Update all previous notifications' status to "resolved"
         resolved_ids = []
@@ -316,9 +312,176 @@ class AINotificationRepository:
             resolved_ids.append(notification.id)
         
         # Commit the transaction (I/O happens here)
-        self.db.commit()
+        await self.db.commit()
         
         return (notification_id, resolved_ids)
+    
+    async def get_reacted_notifications_by_workspace(
+        self,
+        workspace_id: int,
+        workspace_member_ids: Optional[List[int]] = None
+    ) -> List[ReactedAINotification]:
+        """
+        Get all AI notifications that have been reacted on (reaction_status != 'None') for a workspace.
+        
+        Joins:
+        - ai_notifications -> tasks -> notes (for note name and id)
+        - ai_notifications -> workspace_member -> user_profiles (for user icon and name)
+        
+        Args:
+            workspace_id: The workspace ID to filter by
+            workspace_member_ids: Optional list of workspace_member_ids to filter by
+            
+        Returns:
+            List of ReactedAINotification domain models with note and user information
+        """
+        try:
+            # Step 1: Get workspace member IDs
+            stmt_members = select(WorkspaceMemberORM.id).where(
+                WorkspaceMemberORM.workspace_id == workspace_id
+            )
+            
+            if workspace_member_ids:
+                stmt_members = stmt_members.where(
+                    WorkspaceMemberORM.id.in_(workspace_member_ids)
+                )
+            
+            result_members = await self.db.execute(stmt_members)
+            workspace_member_ids_list = [row[0] for row in result_members.all()]
+            
+            if not workspace_member_ids_list:
+                return []
+            
+            # Step 2: Query main notifications
+            stmt_main = (
+                select(AINotificationORM, TaskORM)
+                .join(TaskORM, AINotificationORM.task_id == TaskORM.id)
+                .where(
+                    and_(
+                        TaskORM.workspace_member_id.in_(workspace_member_ids_list),
+                        cast(AINotificationORM.reaction_status, String) != "None"
+                    )
+                )
+                .order_by(AINotificationORM.created_at.desc())
+            )
+            result_main = await self.db.execute(stmt_main)
+            results = result_main.all()
+            
+            if not results:
+                return []
+
+            
+            # Collect all unique IDs we need to fetch
+            note_ids = {
+                getattr(task, 'source_note_id', None)
+                for _, task in results
+                if task and getattr(task, 'source_note_id', None) is not None
+            }
+            workspace_member_ids_to_fetch = {
+                getattr(result, 'workspace_member_id', None)
+                for result, _ in results
+                if getattr(result, 'workspace_member_id', None) is not None
+            }
+            
+            # Batch fetch notes
+            notes_dict = {}
+            if note_ids:
+                stmt_notes = select(NoteORM).where(NoteORM.id.in_(note_ids))
+                result_notes = await self.db.execute(stmt_notes)
+                notes = result_notes.scalars().all()
+                notes_dict = {getattr(note, 'id', None): note for note in notes if getattr(note, 'id', None) is not None}
+            
+            # Batch fetch workspace members and their user profiles
+            workspace_members_dict = {}
+            user_profiles_dict = {}
+            if workspace_member_ids_to_fetch:
+                stmt_wm = select(WorkspaceMemberORM).where(
+                    WorkspaceMemberORM.id.in_(workspace_member_ids_to_fetch)
+                )
+                result_wm = await self.db.execute(stmt_wm)
+                workspace_members = result_wm.scalars().all()
+                workspace_members_dict = {wm.id: wm for wm in workspace_members}
+                
+                # Get unique user IDs
+                user_ids = {
+                    getattr(wm, 'user_id', None)
+                    for wm in workspace_members
+                    if getattr(wm, 'user_id', None) is not None
+                }
+                if user_ids:
+                    stmt_profiles = select(UserProfileORM).where(
+                        UserProfileORM.id.in_(user_ids)
+                    )
+                    result_profiles = await self.db.execute(stmt_profiles)
+                    user_profiles = result_profiles.scalars().all()
+                    user_profiles_dict = {getattr(up, 'id', None): up for up in user_profiles if getattr(up, 'id', None) is not None}
+            
+            domain_notifications = []
+            for result, task in results:
+                try:
+                    # Get note info
+                    note_info = None
+                    if task:
+                        source_note_id = getattr(task, 'source_note_id', None)
+                        if source_note_id:
+                            note = notes_dict.get(source_note_id)
+                            if note:
+                                note_id = getattr(note, 'id', None)
+                                note_title = getattr(note, 'title', None)
+                                if note_id is not None:
+                                    note_info = NoteInfo(
+                                        id=int(note_id),
+                                        title=note_title if note_title else None
+                                    )
+                    
+                    # Get user info
+                    user_info = None
+                    workspace_member_id = getattr(result, 'workspace_member_id', None)
+                    if workspace_member_id:
+                        workspace_member = workspace_members_dict.get(workspace_member_id)
+                        if workspace_member:
+                            user_id_value = getattr(workspace_member, 'user_id', None)
+                            if user_id_value:
+                                user_profile = user_profiles_dict.get(user_id_value)
+                                if user_profile:
+                                    user_id_str = str(getattr(user_profile, 'id', ''))
+                                    user_name = getattr(user_profile, 'name', None)
+                                    user_avatar = getattr(user_profile, 'avatar_url', None)
+                                    user_info = UserInfo(
+                                        id=user_id_str,
+                                        name=user_name,
+                                        avatar_url=user_avatar
+                                    )
+                    
+                    domain_notification = ReactedAINotification(
+                        id=result.id,
+                        title=result.title,
+                        ai_context=result.ai_context,
+                        body=result.body,
+                        due_date=result.due_date,
+                        task_id=result.task_id,
+                        user_id=str(result.user_id),
+                        workspace_member_id=result.workspace_member_id,
+                        status=result.status,
+                        reaction_status=result.reaction_status,
+                        reaction_text=result.reaction_text,
+                        created_at=result.created_at,
+                        updated_at=result.updated_at,
+                        note=note_info,
+                        user=user_info
+                    )
+                    domain_notifications.append(domain_notification)
+                except Exception as e:
+                    logger.error(f"Error processing notification {result.id}: {e}", exc_info=True)
+                    raise
+            return domain_notifications
+            
+        except Exception as e:
+            logger.error(
+                f"Error in get_reacted_notifications_by_workspace: {e}",
+                exc_info=True
+            )
+            raise
     
     def _to_domain_model(self, orm_notification: AINotificationORM) -> AINotification:
         """

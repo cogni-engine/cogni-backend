@@ -1,22 +1,24 @@
 """Business logic for AI Notifications"""
 
 from uuid import UUID
-from sqlalchemy.orm import Session
+from typing import List, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.features.ai_notifications.repository import AINotificationRepository
 from app.features.ai_notifications.domain import (
     CompleteNotificationResponse,
     PostponeNotificationResponse,
+    ReactedAINotification,
 )
 
 
 class AINotificationService:
     """Service layer for AI notification business logic"""
     
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.repository = AINotificationRepository(db)
     
-    def complete_notification(
+    async def complete_notification(
         self,
         notification_id: int,
         user_id: UUID | str
@@ -40,12 +42,12 @@ class AINotificationService:
             ValueError: If notification not found or unauthorized
         """
         # Verify notification exists and belongs to user (pure logic, delegates I/O)
-        notification = self.repository.get_notification_by_id(notification_id, user_id)
+        notification = await self.repository.get_notification_by_id(notification_id, user_id)
         if not notification:
             raise ValueError(f"Notification {notification_id} not found")
         
         # Perform the completion (I/O delegated to repository)
-        completed_id, resolved_ids = self.repository.complete_notification_and_resolve_previous(
+        completed_id, resolved_ids = await self.repository.complete_notification_and_resolve_previous(
             notification_id, user_id
         )
         
@@ -56,7 +58,7 @@ class AINotificationService:
             message=f"Notification {completed_id} completed. {len(resolved_ids)} previous notifications resolved."
         )
     
-    def postpone_notification(
+    async def postpone_notification(
         self,
         notification_id: int,
         user_id: UUID | str,
@@ -82,12 +84,12 @@ class AINotificationService:
             ValueError: If notification not found or unauthorized
         """
         # Verify notification exists and belongs to user (pure logic, delegates I/O)
-        notification = self.repository.get_notification_by_id(notification_id, user_id)
+        notification = await self.repository.get_notification_by_id(notification_id, user_id)
         if not notification:
             raise ValueError(f"Notification {notification_id} not found")
         
         # Perform the postponement (I/O delegated to repository)
-        postponed_id, resolved_ids = self.repository.postpone_notification_and_resolve_previous(
+        postponed_id, resolved_ids = await self.repository.postpone_notification_and_resolve_previous(
             notification_id, user_id, reaction_text
         )
         
@@ -96,4 +98,24 @@ class AINotificationService:
             postponed_notification_id=postponed_id,
             resolved_notification_ids=resolved_ids,
             message=f"Notification {postponed_id} postponed. {len(resolved_ids)} previous notifications resolved."
+        )
+    
+    async def get_reacted_notifications_by_workspace(
+        self,
+        workspace_id: int,
+        workspace_member_ids: Optional[List[int]] = None
+    ) -> List[ReactedAINotification]:
+        """
+        Get all AI notifications that have been reacted on for a workspace.
+        
+        Args:
+            workspace_id: The workspace ID to filter by
+            workspace_member_ids: Optional list of workspace_member_ids to filter by
+            
+        Returns:
+            List of ReactedAINotification with note and user information
+        """
+        return await self.repository.get_reacted_notifications_by_workspace(
+            workspace_id,
+            workspace_member_ids
         )
