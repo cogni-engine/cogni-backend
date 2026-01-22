@@ -30,8 +30,6 @@ executor_prompt_template = ChatPromptTemplate.from_messages([
 タスク詳細:
 {task_description}
 
-期限: {task_deadline}
-
 現在の日時: {current_datetime}
 
 成果物本体をそのまま出力してください。"""

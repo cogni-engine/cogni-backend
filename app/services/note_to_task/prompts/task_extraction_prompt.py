@@ -5,141 +5,109 @@ from langchain_core.prompts import ChatPromptTemplate
 prompt_template = ChatPromptTemplate.from_messages([
     (
         "system",
-        "あなたはNote内容をもとに実行可能なタスクを生成する専門家です。"
-        "以下の方針に従って、Noteの内容を忠実にタスクへ変換してください。"
+        """You are an expert at converting Notes into executable tasks.
 
-        "\n\n【重要原則】"
-        "\n★ Noteに書かれている内容は、一言一句そのまま全て含めてください。"
-        "\n★ メモ書きや断片的な内容も、必ず全て漏れなくdescriptionに含めてください。"
-        "\n★ Note内の全ての項目・要素・文章・断片を、タスクのdescriptionに確実に反映させてください。"
-        "\n★ descriptionには全ての情報を詳細に、原文のまま含めてください。descriptionが長くなることは全く問題ありません。"
-        "\n★ 簡潔さよりも網羅性を優先してください。情報を省略・要約してはいけません。"
-        
-        "\n\n【リカーリングタスク（定期実行タスク）】"
-        "\n定期的に実行するタスクの場合、recurrence_patternとnext_run_timeを設定してください："
-        "\n- recurrence_pattern: EVERY_DAY, EVERY_MONTH, EVERY_MONDAY などの形式"
-        "\n  複数曜日の場合はカンマ区切り（例: EVERY_MONDAY, EVERY_FRIDAY）"
-        "\n- next_run_time: 次回実行時刻をISO形式で指定"
-        "\n例："
-        "\n- 「毎日9時」→ recurrence_pattern=\"EVERY_DAY\", next_run_time=\"2024-12-12T09:00:00\""
-        "\n- 「毎週月曜10時」→ recurrence_pattern=\"EVERY_MONDAY\", next_run_time=\"2024-12-16T10:00:00\""
-        "\n- 「平日18時」→ recurrence_pattern=\"EVERY_MONDAY, EVERY_TUESDAY, EVERY_WEDNESDAY, EVERY_THURSDAY, EVERY_FRIDAY\", next_run_time=\"2024-12-11T18:00:00\""
-        
-        "\n\n【AIタスク（AI自動実行タスク）】"
-        "\nis_ai_taskフィールドで、AIが実行できるタスクかどうかを判定してください："
-        "\n- デフォルト: is_ai_task=true（AIができることがある場合）"
-        "\n- is_ai_task=true: AIが実行できるタスク、またはAIが事前に準備・支援できるタスク"
-        "\n  主なパターン:"
-        "\n  - 情報収集・調査（データ分析、競合調査、市場動向チェックなど）"
-        "\n  - 原案作成（下書き、アウトライン、要点整理、文章作成など）"
-        "\n  - データの整理・要約（情報の構造化、レポートの準備、分析結果のまとめなど）"
-        "\n  - コード生成、ドキュメント作成、計算・分析など"
-        "\n  - 定期的な情報収集・監視（最新のニュースまとめ、市場動向チェックなど）"
-        "\n  - 人間が実行するタスクでも、AIが事前に準備・調査・原案作成などをしておける場合"
-        "\n- is_ai_task=false: AIができることが全くない場合のみ設定"
-        "\n※ 重要: 人間が実行するタスクでも、できるだけAIがやれることを探し、"
-        "\n  【AIがやるべきこと・できること】セクションに具体的に記載する。"
-        "\n  AIができることがある場合は必ずis_ai_task=trueを設定する。"
-        "\n※ AIタスクのdeadlineは、関連する人間タスクより前に設定すること"
-        
-        "\n\n【タイトルの階層構造】"
-        "\n全てのタスクのタイトルは、必ずノートタイトルを含む3階層構造で表現してください："
-        "\n- 基本形式：「ノートタイトル - 親タスク名 - 子タスク名」"
-        "\n- 単独のタスクの場合：「ノートタイトル - タスク名」"
-        "\n- 関連する複数のタスクがある場合：「ノートタイトル - 親タスク名 - 子タスク名」"
-        "\n- 階層は3階層（ノートタイトル - 親タスク - 子タスク）を標準とし、必要に応じて2階層（ノートタイトル - タスク名）も使用可能"
-        "\n- 同じ親タスクに属する子タスクは、同じプレフィックス（「ノートタイトル - 親タスク名」）を使用する"
-        
-        "\n\n【descriptionの構造化】"
-        "\n各タスクのdescriptionは、以下の構造で記述してください："
-        "\n"
-        "\n【Note内容】"
-        "\n（Noteに書かれた内容を一言一句そのまま転記。複数項目がある場合は全て列挙）"
-        "\n"
-        "\n【ユーザーの意図・推測】"
-        "\n（ユーザーが何をしようとしているのか、Noteの内容から推測される目的や意図。"
-        "ユーザーの背景や文脈を考慮して、何を達成したいのかを推測する）"
-        "\n"
-        "\n【理由・目的】"
-        "\n（なぜこのタスクを実行するのか）"
-        "\n"
-        "\n【AIがやるべきこと・できること】"
-        "\n（このタスクにおいて、AIが実行できること、事前に準備できること、支援できることを具体的に列挙する。"
-        "例：情報収集、調査、データ分析、原案作成、下書き、アウトライン、要点整理、"
-        "データの整理・要約、情報の構造化、レポートの準備、コード生成、文章作成など。"
-        "人間が実行するタスクでも、できるだけAIがやれることを探す。"
-        "AIができることが全くない場合のみ「なし」と明記する）"
-        "\n"
-        "\n【方法・手順】"
-        "\n（どのようにこのタスクを実行するのか。できるだけ具体的に）"
-        
-        
-        "\n\n【タスク統合の方針】"
-        "\nタスクの生成にあたっては、以下の点を意識してください："
-        "\n- 統合できるタスクは積極的に統合し、タスク数を必要以上に増やさない"
-        "\n- 同じタイミング・同じ人・同じ目的で実行可能なタスクは統合を検討する"
-        "\n- 実行主体・目的・順序・タイミングが明確に異なる場合のみ分割する"
-        "\n- タスクが多すぎると管理が困難になるため、合理的な範囲で統合を優先する"
-        
-        "\n\n【方針まとめ】"
-        "\n1. Note内容を一言一句そのまま含め、原文を保持する"
-        "\n2. 全ての情報を漏らさずdescriptionの【Note内容】セクションに含める"
-        "\n3. 【Note内容】セクションは詳細であればあるほど良い"
-        "\n4. タスクタイトルは必ずノートタイトルを含む階層構造で表現する（「ノートタイトル - 親タスク名 - 子タスク名」または「ノートタイトル - タスク名」）"
-        "\n5. 統合できるタスクは統合し、タスク数を抑制する"
-        "\n6. Noteの言語をそのまま保持する"
-        "\n7. 【理由・目的】と【方法・手順】はNoteの内容を尊重する"
-        "\n8. 期限はNote内の記述を尊重しつつ、実行所要時間を考慮する"
+Follow these rules strictly.
+
+=== CORE RULES ===
+- Include the Note content verbatim, word-for-word, without omission.
+- Even fragmented or memo-style text must be fully included.
+- Never summarize or delete information.
+- Prioritize completeness over brevity.
+- Preserve the original language of the Note.
+
+=== TASK STRUCTURE ===
+Each task must include:
+- title (hierarchical, including the Note title)
+- description (structured as below)
+- status = "pending"
+- deadline (ISO, only if explicitly stated in the Note)
+- next_run_time (ISO, required for all tasks)
+- is_ai_task (true by default)
+- source_note_id
+- recurrence_pattern (only for recurring tasks)
+
+=== TITLE FORMAT ===
+- Standard: "Note Title - Parent Task - Child Task"
+- Single task: "Note Title - Task Name"
+- Use consistent prefixes for related tasks.
+
+=== DESCRIPTION FORMAT ===
+Use the following sections in this exact order:
+
+【Note Content】
+(Transcribe ALL Note content verbatim, without omission)
+
+【User Intent / Inference】
+(Infer what the user is trying to achieve based on the Note)
+
+【Reason / Purpose】
+(Why this task should be done)
+
+【What AI Should / Can Do】
+(List all possible AI contributions: research, drafting, analysis, structuring, web search, etc.
+Write "None" only if AI truly cannot help.)
+
+【User–AI Collaboration Strategy】
+(How the user and AI should cooperate)
+
+【Execution Timing Rationale】
+(Explain when this task should run and why.
+This reasoning must match next_run_time.)
+
+【Method / Steps】
+(Concrete execution steps)
+
+=== AI TASK RULES ===
+- is_ai_task=true if AI can do anything at all (default).
+- Even human tasks should be marked true if AI can prepare, research, or draft.
+- Set is_ai_task=false ONLY if AI truly cannot contribute.
+- AI task deadlines must be earlier than related human tasks.
+
+=== next_run_time RULES ===
+- Always required.
+- If is_ai_task=true:
+  - Deliverables needed in advance → 2–3 days before deadline
+  - Deadline-dependent info → at or just before deadline
+- If is_ai_task=false:
+  - Set when the user should begin preparation
+- If no deadline exists:
+  - AI task → ASAP (hours to 1 day)
+  - User task → 1–3 days later
+
+=== RECURRING TASKS ===
+- recurrence_pattern examples:
+  - EVERY_DAY
+  - EVERY_MONDAY
+  - EVERY_MONDAY, EVERY_FRIDAY
+- next_run_time = first execution time inferred from the Note
+
+=== TASK CONSOLIDATION ===
+- Merge tasks whenever executor, timing, and purpose align.
+- Split only when executor, purpose, order, or timing clearly differs.
+- Avoid unnecessary task proliferation.
+
+=== ABSOLUTE REQUIREMENT ===
+Every piece of Note content must appear verbatim in at least one task’s 【Note Content】 section.
+"""
     ),
     (
         "user",
-        """以下のNote内容をもとに、実行可能なタスクのリストを生成してください。
+        """Generate executable tasks from the Note below.
 
-現在の日時: {current_datetime}
+Current datetime: {current_datetime}
+Note title: {note_title}
 
-ノートタイトル: {note_title}
-
-Note内容:
+Note content:
 {_note_text}
 
-【出力要件】
-- 現在の日時を基準に、deadlineを設定してください
-- Note内に具体的な期限が書かれていない場合は、期限を設けないでください。
-- タスクは、実行主体・目的・順序・タイミングが明確に異なる場合のみ分けてください。
-- 統合できるタスクは統合し、タスク数を必要以上に増やさないようにしてください
-- 関連するタスクは、タイトルに「ノートタイトル - 親タスク名 - 子タスク名」の階層構造を持たせてください
-- 単独のタスクも「ノートタイトル - タスク名」の形式でタイトルを付けてください
-- 各タスクに以下の情報を含めてください:
-  - title: タスクのタイトル。必ず「ノートタイトル - 親タスク名 - 子タスク名」または「ノートタイトル - タスク名」の形式で階層構造を表現
-  - description: 必ず以下の構造化された形式で記述：
-  
-               【Note内容】
-               （Noteに書かれた内容を一言一句そのまま全て転記。抜け漏れ厳禁）
-               
-               【ユーザーの意図・推測】
-               （ユーザーが何をしようとしているのか、Noteの内容から推測される目的や意図）
-               
-               【理由・目的】
-               （なぜこのタスクを実行するのか）
-               
-               【AIがやるべきこと・できること】
-               （このタスクにおいて、AIが実行できること、事前に準備できること、支援できることを具体的に列挙。
-               人間が実行するタスクでも、できるだけAIがやれることを探す。AIができることが全くない場合のみ「なし」と明記）
-               
-               【方法・手順】
-               （どのようにこのタスクを実行するのか。具体的なステップを記載）
-               
-               ※ descriptionが長くなることは推奨されます
-               ※ Noteの言語をそのまま保持してください
-               
-  - status: "pending"
-  - deadline: ISO形式で指定（定期タスクの場合は不要）
-  - source_note_id: 元のNoteのID
-  - recurrence_pattern: 定期実行の場合のみ指定（例: "EVERY_DAY", "EVERY_MONDAY, EVERY_FRIDAY"）
-  - next_run_time: 定期実行の場合のみ指定（ISO形式）
-  - is_ai_task: AIができることがある場合はtrue（デフォルト）、AIができることが全くない場合のみfalseを設定。人間が実行するタスクでも、AIが事前に準備・調査・原案作成などをしておける場合はtrueを設定する
-- Noteの全ての内容が必ずいずれかのタスクのdescriptionの【Note内容】セクションに一言一句含まれるようにしてください
-- 実行すべきタスクが見つからない場合は、空の配列を返してください。"""
+OUTPUT RULES:
+- Do NOT invent deadlines. Set deadlines only if explicitly written.
+- Set next_run_time for all tasks.
+- Preserve all Note content verbatim.
+- Use hierarchical titles.
+- Consolidate tasks when possible.
+- If no executable task exists, return an empty array.
+"""
     )
 ])
-

@@ -33,6 +33,8 @@ class Task(Base):
     
     # Recurrence fields
     recurrence_pattern = Column(String, nullable=True)
+    # next_run_timeはAI生成タスクでは必須だが、DBレベルでは既存データとの互換性のためnullable=True
+    # 新規作成時はAIがNote内容とdeadlineから最適な実行タイミングを判断して設定する
     next_run_time = Column(DateTime(timezone=True), nullable=True)
     is_recurring_task_active = Column(Boolean, default=True, nullable=True)
     last_recurring_at = Column(DateTime(timezone=True), nullable=True)

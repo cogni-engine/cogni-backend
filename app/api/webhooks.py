@@ -242,11 +242,12 @@ async def process_recurring_tasks():
     
     # 統計情報
     tasks_updated = 0
+    tasks_stopped = 0
     notifications_created = 0
     
     # タスク処理関数
     async def process_task_with_limit(task_data):
-        nonlocal tasks_updated, notifications_created
+        nonlocal tasks_updated, tasks_stopped, notifications_created
         
         async with semaphore:
             try:
@@ -254,6 +255,38 @@ async def process_recurring_tasks():
                 old_next_run_time = datetime.fromisoformat(task_data["next_run_time"].replace("Z", "+00:00"))
                 recurrence_pattern = task_data["recurrence_pattern"]
                 is_active = task_data.get("is_recurring_task_active", True)
+                is_ai_task = task_data.get("is_ai_task", False)
+                
+                # is_ai_taskの場合、未解決の通知が3個以上あるかチェック
+                if is_ai_task and is_active:
+                    # statusが"resolved"でない通知を取得
+                    response = (
+                        supabase.table("ai_notifications")
+                        .select("*")
+                        .eq("task_id", task_id)
+                        .neq("status", "resolved")
+                        .execute()
+                    )
+                    unresolved_notifications = response.data if response.data else []
+                    unresolved_count = len(unresolved_notifications)
+                    
+                    if unresolved_count >= 3:
+                        # 未解決通知が3個以上ある場合、タスクを停止
+                        update_data = TaskUpdate(is_recurring_task_active=False)
+                        await task_repo.update(task_id, update_data)
+                        tasks_stopped += 1
+                        
+                        logger.warning(
+                            f"⚠️ Task {task_id}: Stopped due to {unresolved_count} unresolved notifications. "
+                            f"is_recurring_task_active set to False."
+                        )
+                        
+                        return {
+                            "status": "stopped",
+                            "task_id": task_id,
+                            "reason": f"unresolved_notifications >= 3 ({unresolved_count})",
+                            "notifications_created": 0
+                        }
                 
                 # 新しいnext_run_timeを計算
                 new_next_run_time = calculate_next_run_time(old_next_run_time, recurrence_pattern)
@@ -321,11 +354,12 @@ async def process_recurring_tasks():
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
     
     logger.info(f"🎉 CRON completed: {success}/{len(recurring_tasks)} tasks processed")
-    logger.info(f"📊 Tasks updated: {tasks_updated}, Notifications created: {notifications_created}")
+    logger.info(f"📊 Tasks updated: {tasks_updated}, Tasks stopped: {tasks_stopped}, Notifications created: {notifications_created}")
     
     return {
         "status": "ok",
         "tasks_processed": tasks_updated,
+        "tasks_stopped": tasks_stopped,
         "notifications_created": notifications_created
     }
 
@@ -361,7 +395,7 @@ async def _execute_ai_tasks_common(
     now = datetime.now(timezone.utc)
     target_time = now + timedelta(minutes=minutes_ahead)
     
-    logger.info(f"Processing AI tasks with next_run_time or deadline between {now} and {target_time}{filter_desc}")
+    logger.info(f"Processing AI tasks with next_run_time between {now} and {target_time}{filter_desc}")
     
     # TaskResultRepositoryとAINotificationRepositoryを初期化
     task_result_repo = TaskResultRepository(supabase)
@@ -369,17 +403,15 @@ async def _execute_ai_tasks_common(
     
     # 条件に合うタスクを取得
     # is_recurring_task_active=True AND is_ai_task=True AND
-    # (now < next_run_time <= target_time OR now < deadline <= target_time)
+    # now < next_run_time <= target_time
     try:
         response = (
             supabase.table("tasks")
             .select("*")
             .eq("is_recurring_task_active", True)
             .eq("is_ai_task", True)
-            .or_(
-                f"and(next_run_time.gt.{now.isoformat()},next_run_time.lte.{target_time.isoformat()}),"
-                f"and(deadline.gt.{now.isoformat()},deadline.lte.{target_time.isoformat()})"
-            )
+            .gt("next_run_time", now.isoformat())
+            .lte("next_run_time", target_time.isoformat())
             .execute()
         )
         
@@ -449,10 +481,10 @@ async def _execute_ai_tasks_common(
                 logger.info(f"✅ Task {task.id} executed and saved: result_id={saved_result.id}")
                 
                 # 完了通知を生成
-                # due_dateはnext_run_timeがあればそれ、なければdeadlineを使用
-                due_date = task.next_run_time if task.next_run_time else task.deadline
-                
-                if due_date:
+                # due_dateはnext_run_timeを使用（AIタスクでは必須フィールド）
+                if task.next_run_time:
+                    due_date = task.next_run_time
+                    
                     try:
                         notification = await generate_completion_notification(
                             task=task,
@@ -470,7 +502,7 @@ async def _execute_ai_tasks_common(
                     except Exception as e:
                         logger.error(f"Failed to create completion notification for task {task.id}: {e}")
                 else:
-                    logger.warning(f"Task {task.id}: No next_run_time or deadline, skipping notification creation")
+                    logger.warning(f"Task {task.id}: next_run_time is None, skipping notification creation")
                 
                 return {
                     "status": "ok",
@@ -506,7 +538,7 @@ async def _execute_ai_tasks_common(
 async def execute_ai_tasks():
     """
     本番用CRON実行エンドポイント（10分ごと）
-    - 次の10分以内にnext_run_timeまたはdeadlineが来るタスクを実行
+    - 次の10分以内にnext_run_timeが来るタスクを実行
     - 開発者のタスクを除外
     """
     return await _execute_ai_tasks_common(
@@ -520,7 +552,7 @@ async def execute_ai_tasks():
 async def execute_ai_tasks_local():
     """
     ローカル開発用CRON実行エンドポイント（1分ごと）
-    - 次の1分以内にnext_run_timeまたはdeadlineが来るタスクを実行
+    - 次の1分以内にnext_run_timeが来るタスクを実行
     - 開発者のタスクのみを処理
     """
     return await _execute_ai_tasks_common(
