@@ -142,10 +142,18 @@ class AINotificationService:
             List of ReactedAINotification with note and user information
             
         Raises:
-            ValueError: If user_id is provided and user is not a member of the workspace
+            ValueError: If user_id is provided and user is not a member of the workspace,
+                       or if any workspace_member_id does not belong to the workspace
         """
         if user_id is not None:
             await self.verify_user_workspace_membership(workspace_id, user_id)
+        
+        # Validate that all provided workspace_member_ids belong to this workspace
+        # This prevents information disclosure and unauthorized access
+        if workspace_member_ids:
+            await self.repository.validate_workspace_member_ids(
+                workspace_id, workspace_member_ids
+            )
         
         return await self.repository.get_reacted_notifications_by_workspace(
             workspace_id,

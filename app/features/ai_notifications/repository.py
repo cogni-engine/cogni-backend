@@ -588,6 +588,39 @@ class AINotificationRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none() is not None
     
+    async def validate_workspace_member_ids(
+        self,
+        workspace_id: int,
+        workspace_member_ids: List[int]
+    ) -> None:
+        """
+        Validate that all provided workspace_member_ids belong to the specified workspace.
+        
+        Args:
+            workspace_id: The workspace ID to validate against
+            workspace_member_ids: List of workspace_member_ids to validate
+            
+        Raises:
+            ValueError: If any workspace_member_id does not belong to the workspace
+        """
+        if not workspace_member_ids:
+            return
+        
+        # Query all workspace member IDs that belong to this workspace
+        stmt = select(WorkspaceMemberORM.id).where(
+            WorkspaceMemberORM.workspace_id == workspace_id
+        )
+        result = await self.db.execute(stmt)
+        valid_member_ids = {row[0] for row in result.all()}
+        
+        # Check if all provided IDs are valid
+        invalid_ids = set(workspace_member_ids) - valid_member_ids
+        if invalid_ids:
+            raise ValueError(
+                f"Invalid workspace_member_ids: {sorted(invalid_ids)}. "
+                f"These IDs do not belong to workspace {workspace_id}"
+            )
+    
     def _to_domain_model(self, orm_notification: AINotificationORM) -> AINotification:
         """
         Convert SQLAlchemy ORM model to Pydantic domain model.
