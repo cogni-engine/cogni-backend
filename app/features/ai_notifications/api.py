@@ -9,8 +9,8 @@ from app.db import get_db
 from app.middleware.auth import get_current_user_id
 from app.features.ai_notifications.repository import AINotificationRepository
 from app.features.ai_notifications.service import AINotificationService
-from app.features.ai_notifications.domain import (
-    AINotification,
+from app.features.ai_notifications.domain import AINotification
+from app.features.ai_notifications.schemas import (
     CompleteNotificationResponse,
     PostponeNotificationRequest,
     PostponeNotificationResponse,
@@ -160,12 +160,15 @@ async def get_reacted_notifications_by_workspace(
         service = AINotificationService(db)
         notifications = await service.get_reacted_notifications_by_workspace(
             workspace_id,
-            workspace_member_ids
+            workspace_member_ids,
+            user_id
         )
         logger.info(f"Returning {len(notifications)} notifications for workspace {workspace_id}")
         
         return notifications
         
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

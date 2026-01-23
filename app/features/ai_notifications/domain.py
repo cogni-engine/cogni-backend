@@ -1,6 +1,6 @@
 """Domain models for AI Notifications feature"""
 
-from pydantic import BaseModel, UUID4, field_serializer
+from pydantic import BaseModel, field_serializer
 from enum import Enum
 from typing import Optional
 from datetime import datetime
@@ -54,6 +54,12 @@ class AINotificationBase(BaseModel):
         """Serialize UUID to string for JSON"""
         return str(user_id)
 
+    def has_reaction(self) -> bool:
+        return self.reaction_status != ReactionStatus.NONE
+
+    def can_be_actioned(self) -> bool:
+        return self.status == NotificationStatus.SENT and not self.has_reaction()
+
 
 class AINotificationCreate(AINotificationBase):
     """AI notification creation model"""
@@ -80,68 +86,3 @@ class AINotification(AINotificationBase):
         from_attributes = True
 
 
-class CompleteNotificationRequest(BaseModel):
-    """Request model for completing a notification"""
-    pass  # Empty since notification_id comes from path
-
-
-class CompleteNotificationResponse(BaseModel):
-    """Response model for notification completion"""
-    completed_notification_id: int
-    resolved_notification_ids: list[int]
-    message: str
-
-
-class PostponeNotificationRequest(BaseModel):
-    """Request model for postponing a notification"""
-    reaction_text: str
-
-
-class PostponeNotificationResponse(BaseModel):
-    """Response model for notification postponement"""
-    postponed_notification_id: int
-    resolved_notification_ids: list[int]
-    message: str
-
-
-class NoteInfo(BaseModel):
-    """Note information for reacted notifications"""
-    id: int
-    title: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
-
-
-class UserInfo(BaseModel):
-    """User information for reacted notifications"""
-    id: str  # UUID as string
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
-
-
-class ReactedAINotification(BaseModel):
-    """AI Notification with note and user information for reacted notifications"""
-    id: int
-    title: str
-    ai_context: str
-    body: Optional[str] = None
-    due_date: datetime
-    task_id: int
-    user_id: str  # UUID as string
-    workspace_member_id: Optional[int] = None
-    status: NotificationStatus
-    reaction_status: ReactionStatus
-    reaction_text: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    
-    # Joined data
-    note: Optional[NoteInfo] = None
-    user: Optional[UserInfo] = None
-    
-    class Config:
-        from_attributes = True

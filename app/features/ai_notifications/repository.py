@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, func, select, cast, String
+from sqlalchemy import and_, or_, func, select, cast, String, update, text
 
 # SQLAlchemy ORM models
 from app.db.models.ai_notification import (
@@ -20,7 +20,8 @@ from app.db.models.workspace_member import WorkspaceMember as WorkspaceMemberORM
 from app.db.models.user_profile import UserProfile as UserProfileORM
 
 # Pydantic domain models (feature-local)
-from app.features.ai_notifications.domain import AINotification, ReactedAINotification, NoteInfo, UserInfo
+from app.features.ai_notifications.domain import AINotification
+from app.features.ai_notifications.schemas import ReactedAINotification, NoteInfo, UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class AINotificationRepository:
                     AINotificationORM.user_id == user_id,
                     AINotificationORM.due_date < current_time,
                     AINotificationORM.task_result_id.is_(None),
-                    AINotificationORM.status != "resolved",
+                    cast(AINotificationORM.status, String) != "resolved",
                     cast(AINotificationORM.reaction_status, String) == "None"
                 )
             )
@@ -97,7 +98,7 @@ class AINotificationRepository:
                 and_(
                     AINotificationORM.user_id == user_id,
                     AINotificationORM.due_date < current_time,
-                    AINotificationORM.status != "resolved",
+                    cast(AINotificationORM.status, String) != "resolved",
                     cast(AINotificationORM.reaction_status, String) == "None",
                     or_(
                         AINotificationORM.task_result_id.isnot(None),
@@ -203,7 +204,13 @@ class AINotificationRepository:
         target_due_date = target_notification.due_date
         
         # Update the target notification's reaction_status to "completed"
-        target_notification.reaction_status = ReactionStatus.COMPLETED.value  # type: ignore
+        # Use update() with cast to handle PostgreSQL enum type
+        stmt_update_target = (
+            update(AINotificationORM)
+            .where(AINotificationORM.id == notification_id)
+            .values(reaction_status=text(f"'{ReactionStatus.COMPLETED.value}'::ai_notification_reaction_status"))
+        )
+        await self.db.execute(stmt_update_target)
         
         # Find all notifications from the same task with due_date <= target's due_date
         # excluding the target itself (it's already set to completed)
@@ -216,7 +223,7 @@ class AINotificationRepository:
                     AINotificationORM.due_date <= target_due_date,
                     AINotificationORM.id != notification_id,
                     # Only update if not already resolved
-                    AINotificationORM.status != "resolved"
+                    cast(AINotificationORM.status, String) != "resolved"
                 )
             )
         )
@@ -224,10 +231,15 @@ class AINotificationRepository:
         previous_notifications = result_previous.scalars().all()
         
         # Update all previous notifications' status to "resolved"
-        resolved_ids = []
-        for notification in previous_notifications:
-            notification.status = NotificationStatus.RESOLVED.value  # type: ignore
-            resolved_ids.append(notification.id)
+        # Use update() with cast to handle PostgreSQL enum type
+        resolved_ids: List[int] = [notification.id for notification in previous_notifications]  # type: ignore[list-item]
+        if resolved_ids:
+            stmt_update = (
+                update(AINotificationORM)
+                .where(AINotificationORM.id.in_(resolved_ids))
+                .values(status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status"))
+            )
+            await self.db.execute(stmt_update)
         
         # Commit the transaction (I/O happens here)
         await self.db.commit()
@@ -284,8 +296,16 @@ class AINotificationRepository:
         target_due_date = target_notification.due_date
         
         # Update the target notification's reaction_status to "postponed" and store reaction text
-        target_notification.reaction_status = ReactionStatus.POSTPONED.value  # type: ignore
-        target_notification.reaction_text = reaction_text  # type: ignore
+        # Use update() with cast to handle PostgreSQL enum type
+        stmt_update_target = (
+            update(AINotificationORM)
+            .where(AINotificationORM.id == notification_id)
+            .values(
+                reaction_status=text(f"'{ReactionStatus.POSTPONED.value}'::ai_notification_reaction_status"),
+                reaction_text=reaction_text
+            )
+        )
+        await self.db.execute(stmt_update_target)
         
         # Find all notifications from the same task with due_date <= target's due_date
         # excluding the target itself (it's already set to postponed)
@@ -298,7 +318,7 @@ class AINotificationRepository:
                     AINotificationORM.due_date <= target_due_date,
                     AINotificationORM.id != notification_id,
                     # Only update if not already resolved
-                    AINotificationORM.status != "resolved"
+                    cast(AINotificationORM.status, String) != "resolved"
                 )
             )
         )
@@ -306,10 +326,15 @@ class AINotificationRepository:
         previous_notifications = result_previous.scalars().all()
         
         # Update all previous notifications' status to "resolved"
-        resolved_ids = []
-        for notification in previous_notifications:
-            notification.status = NotificationStatus.RESOLVED.value  # type: ignore
-            resolved_ids.append(notification.id)
+        # Use update() with cast to handle PostgreSQL enum type
+        resolved_ids: List[int] = [notification.id for notification in previous_notifications]  # type: ignore[list-item]
+        if resolved_ids:
+            stmt_update = (
+                update(AINotificationORM)
+                .where(AINotificationORM.id.in_(resolved_ids))
+                .values(status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status"))
+            )
+            await self.db.execute(stmt_update)
         
         # Commit the transaction (I/O happens here)
         await self.db.commit()
@@ -382,6 +407,11 @@ class AINotificationRepository:
                 for result, _ in results
                 if getattr(result, 'workspace_member_id', None) is not None
             }
+            task_result_ids = {
+                getattr(result, 'task_result_id', None)
+                for result, _ in results
+                if getattr(result, 'task_result_id', None) is not None
+            }
             
             # Batch fetch notes
             notes_dict = {}
@@ -390,6 +420,14 @@ class AINotificationRepository:
                 result_notes = await self.db.execute(stmt_notes)
                 notes = result_notes.scalars().all()
                 notes_dict = {getattr(note, 'id', None): note for note in notes if getattr(note, 'id', None) is not None}
+            
+            # Batch fetch task results
+            task_results_dict = {}
+            if task_result_ids:
+                stmt_task_results = select(TaskResultORM).where(TaskResultORM.id.in_(task_result_ids))
+                result_task_results = await self.db.execute(stmt_task_results)
+                task_results = result_task_results.scalars().all()
+                task_results_dict = {getattr(tr, 'id', None): tr for tr in task_results if getattr(tr, 'id', None) is not None}
             
             # Batch fetch workspace members and their user profiles
             workspace_members_dict = {}
@@ -453,6 +491,22 @@ class AINotificationRepository:
                                         avatar_url=user_avatar
                                     )
                     
+                    # Get task result info
+                    task_result_info = None
+                    task_result_id = getattr(result, 'task_result_id', None)
+                    if task_result_id:
+                        task_result = task_results_dict.get(task_result_id)
+                        if task_result:
+                            from app.features.ai_notifications.domain import TaskResult
+                            task_result_info = TaskResult(
+                                id=getattr(task_result, 'id'),
+                                task_id=getattr(task_result, 'task_id'),
+                                result_title=getattr(task_result, 'result_title'),
+                                result_text=getattr(task_result, 'result_text'),
+                                executed_at=getattr(task_result, 'executed_at'),
+                                created_at=getattr(task_result, 'created_at')
+                            )
+                    
                     domain_notification = ReactedAINotification(
                         id=result.id,
                         title=result.title,
@@ -468,7 +522,8 @@ class AINotificationRepository:
                         created_at=result.created_at,
                         updated_at=result.updated_at,
                         note=note_info,
-                        user=user_info
+                        user=user_info,
+                        task_result=task_result_info
                     )
                     domain_notifications.append(domain_notification)
                 except Exception as e:
@@ -482,6 +537,34 @@ class AINotificationRepository:
                 exc_info=True
             )
             raise
+    
+    async def is_user_workspace_member(
+        self,
+        workspace_id: int,
+        user_id: UUID | str
+    ) -> bool:
+        """
+        Check if a user is a member of a workspace.
+        
+        Args:
+            workspace_id: The workspace ID to check
+            user_id: The user ID to check (can be UUID object or string)
+            
+        Returns:
+            True if user is a member, False otherwise
+        """
+        # Convert string UUID to UUID object if needed
+        if isinstance(user_id, str):
+            user_id = UUID(user_id)
+        
+        stmt = select(WorkspaceMemberORM.id).where(
+            and_(
+                WorkspaceMemberORM.workspace_id == workspace_id,
+                WorkspaceMemberORM.user_id == user_id
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none() is not None
     
     def _to_domain_model(self, orm_notification: AINotificationORM) -> AINotification:
         """
