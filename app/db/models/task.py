@@ -37,7 +37,6 @@ class Task(Base):
     # 新規作成時はAIがNote内容とdeadlineから最適な実行タイミングを判断して設定する
     next_run_time = Column(DateTime(timezone=True), nullable=True)
     is_recurring_task_active = Column(Boolean, default=True, nullable=True)
-    last_recurring_at = Column(DateTime(timezone=True), nullable=True)
     
     # AI task flag
     is_ai_task = Column(Boolean, default=False, nullable=True)

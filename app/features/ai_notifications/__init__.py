@@ -10,10 +10,15 @@ from app.features.ai_notifications.domain import (
     NotificationStatus,
     ReactionStatus,
     TaskResult,
+)
+from app.features.ai_notifications.schemas import (
     CompleteNotificationRequest,
     CompleteNotificationResponse,
     PostponeNotificationRequest,
     PostponeNotificationResponse,
+    ReactedAINotification,
+    NoteInfo,
+    UserInfo,
 )
 
 __all__ = [
@@ -30,4 +35,7 @@ __all__ = [
     "CompleteNotificationResponse",
     "PostponeNotificationRequest",
     "PostponeNotificationResponse",
+    "ReactedAINotification",
+    "NoteInfo",
+    "UserInfo",
 ]

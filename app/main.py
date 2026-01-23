@@ -54,3 +54,10 @@ def read_root():
         "docs": "/docs",
         "version": "1.0.0"
     }
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close database connections on shutdown"""
+    from app.db.session import engine
+    await engine.dispose()
