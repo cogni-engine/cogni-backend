@@ -361,7 +361,6 @@ class AINotificationRepository:
             List of ReactedAINotification domain models with note and user information
         """
         try:
-            # Step 1: Get workspace member IDs
             stmt_members = select(WorkspaceMemberORM.id).where(
                 WorkspaceMemberORM.workspace_id == workspace_id
             )
@@ -377,7 +376,6 @@ class AINotificationRepository:
             if not workspace_member_ids_list:
                 return []
             
-            # Step 2: Query main notifications
             stmt_main = (
                 select(AINotificationORM, TaskORM)
                 .join(TaskORM, AINotificationORM.task_id == TaskORM.id)
@@ -387,7 +385,7 @@ class AINotificationRepository:
                         cast(AINotificationORM.reaction_status, String) != "None"
                     )
                 )
-                .order_by(AINotificationORM.created_at.desc())
+                .order_by(AINotificationORM.updated_at.desc())
             )
             result_main = await self.db.execute(stmt_main)
             results = result_main.all()
@@ -395,8 +393,6 @@ class AINotificationRepository:
             if not results:
                 return []
 
-            
-            # Collect all unique IDs we need to fetch
             note_ids = {
                 getattr(task, 'source_note_id', None)
                 for _, task in results
@@ -413,14 +409,20 @@ class AINotificationRepository:
                 if getattr(result, 'task_result_id', None) is not None
             }
             
-            # Batch fetch notes
+            # Batch fetch notes - OPTIMIZED: Only select id and title to avoid loading large TEXT columns
             notes_dict = {}
             if note_ids:
-                stmt_notes = select(NoteORM).where(NoteORM.id.in_(note_ids))
-                result_notes = await self.db.execute(stmt_notes)
-                notes = result_notes.scalars().all()
-                notes_dict = {getattr(note, 'id', None): note for note in notes if getattr(note, 'id', None) is not None}
-            
+                try:
+                    # Only select the columns we actually need (id and title)
+                    # This avoids loading large TEXT columns like ydoc_state and text
+                    stmt_notes = select(NoteORM.id, NoteORM.title).where(NoteORM.id.in_(note_ids))
+                    result_notes = await self.db.execute(stmt_notes)
+                    notes_rows = result_notes.all()
+                    # Build dict from rows (Row objects with id and title attributes)
+                    notes_dict = {row.id: row for row in notes_rows}
+                except Exception as e:
+                    logger.error(f"Step 4 ERROR: {e}", exc_info=True)
+                    raise
             # Batch fetch task results
             task_results_dict = {}
             if task_result_ids:
@@ -429,31 +431,53 @@ class AINotificationRepository:
                 task_results = result_task_results.scalars().all()
                 task_results_dict = {getattr(tr, 'id', None): tr for tr in task_results if getattr(tr, 'id', None) is not None}
             
-            # Batch fetch workspace members and their user profiles
+            # Batch fetch workspace members and their user profiles - OPTIMIZED with JOIN
             workspace_members_dict = {}
             user_profiles_dict = {}
             if workspace_member_ids_to_fetch:
-                stmt_wm = select(WorkspaceMemberORM).where(
-                    WorkspaceMemberORM.id.in_(workspace_member_ids_to_fetch)
-                )
-                result_wm = await self.db.execute(stmt_wm)
-                workspace_members = result_wm.scalars().all()
-                workspace_members_dict = {wm.id: wm for wm in workspace_members}
-                
-                # Get unique user IDs
-                user_ids = {
-                    getattr(wm, 'user_id', None)
-                    for wm in workspace_members
-                    if getattr(wm, 'user_id', None) is not None
-                }
-                if user_ids:
-                    stmt_profiles = select(UserProfileORM).where(
-                        UserProfileORM.id.in_(user_ids)
+                try:
+                    # Single query with LEFT JOIN to get both workspace members and user profiles
+                    # Only select the columns we need from UserProfile
+                    stmt_wm_with_profiles = (
+                        select(
+                            WorkspaceMemberORM,
+                            UserProfileORM.id,
+                            UserProfileORM.name,
+                            UserProfileORM.avatar_url
+                        )
+                        .outerjoin(
+                            UserProfileORM,
+                            WorkspaceMemberORM.user_id == UserProfileORM.id
+                        )
+                        .where(WorkspaceMemberORM.id.in_(workspace_member_ids_to_fetch))
                     )
-                    result_profiles = await self.db.execute(stmt_profiles)
-                    user_profiles = result_profiles.scalars().all()
-                    user_profiles_dict = {getattr(up, 'id', None): up for up in user_profiles if getattr(up, 'id', None) is not None}
-            
+                    result_wm_profiles = await self.db.execute(stmt_wm_with_profiles)
+                    rows = result_wm_profiles.all()
+                    
+                    # Build both dictionaries in one pass
+                    for row in rows:
+                        wm = row[0]  # WorkspaceMemberORM object
+                        workspace_members_dict[wm.id] = wm
+                        
+                        # Extract user profile info if available
+                        profile_id = row[1]  # UserProfileORM.id
+                        if profile_id:
+                            # Create a simple object that mimics UserProfileORM for compatibility
+                            class ProfileData:
+                                def __init__(self, id, name, avatar_url):
+                                    self.id = id
+                                    self.name = name
+                                    self.avatar_url = avatar_url
+                            
+                            user_profiles_dict[profile_id] = ProfileData(
+                                id=profile_id,
+                                name=row[2],  # name
+                                avatar_url=row[3]  # avatar_url
+                            )
+                except Exception as e:
+                    logger.error(f"Step 6 ERROR: {e}", exc_info=True)
+                    raise
+
             domain_notifications = []
             for result, task in results:
                 try:
@@ -462,15 +486,13 @@ class AINotificationRepository:
                     if task:
                         source_note_id = getattr(task, 'source_note_id', None)
                         if source_note_id:
-                            note = notes_dict.get(source_note_id)
-                            if note:
-                                note_id = getattr(note, 'id', None)
-                                note_title = getattr(note, 'title', None)
-                                if note_id is not None:
-                                    note_info = NoteInfo(
-                                        id=int(note_id),
-                                        title=note_title if note_title else None
-                                    )
+                            note_row = notes_dict.get(source_note_id)
+                            if note_row:
+                                # note_row is a Row object with id and title attributes
+                                note_info = NoteInfo(
+                                    id=int(note_row.id),
+                                    title=note_row.title if note_row.title else None
+                                )
                     
                     # Get user info
                     user_info = None
