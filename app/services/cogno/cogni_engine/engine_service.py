@@ -13,7 +13,6 @@ from app.models.ai_message import MessageRole
 from app.services.llm.call_llm import LLMService
 from .models.engine_decision import EngineDecision
 from .prompts.engine_prompt import ENGINE_SYSTEM_PROMPT
-from app.utils.datetime_helper import get_current_datetime_ja
 
 logger = logging.getLogger(__name__)
 
@@ -44,29 +43,49 @@ async def make_engine_decision(current_user_id: str, messages: Sequence[MessageL
     task_repo = TaskRepository(supabase_client)
     
     try:
-        
-        # Get user's tasks (exclude completed, but include recently completed within 2 days)
-        # Exclude description to reduce data size
+
+        # Get user's tasks (exclude description to reduce data size)
         all_tasks = await task_repo.find_by_user(current_user_id, exclude_description=True)
-        two_days_ago = datetime.now(timezone.utc) - timedelta(days=2)
-        tasks = []
-        for t in all_tasks:
-            if t.status != "completed":
-                tasks.append(t)
-            elif t.completed_at:
-                # Handle both timezone-aware and naive datetimes
-                completed_at = t.completed_at
-                if completed_at.tzinfo is None:
-                    # If naive, assume UTC
-                    completed_at = completed_at.replace(tzinfo=timezone.utc)
-                if completed_at >= two_days_ago:
-                    tasks.append(t)
-        if not tasks:
-            # No pending tasks, but still check for timer
-            tasks = []
-            logger.info(f"No pending tasks found for user {current_user_id} (total: {len(all_tasks)})")
-        else:
-            logger.info(f"Found {len(tasks)} pending tasks for user {current_user_id} (excluded {len(all_tasks) - len(tasks)} completed)")
+
+        now = datetime.now(timezone.utc)
+        one_week_ago = now - timedelta(days=7)
+        deadline_start = now - timedelta(days=3)
+        deadline_end = now + timedelta(days=3)
+        two_days_ago = now - timedelta(days=2)
+
+        def _normalize_datetime(dt: Optional[datetime]) -> Optional[datetime]:
+            """Ensure datetime is timezone-aware (UTC)"""
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        def _is_relevant_task(t: Task) -> bool:
+            """Check if task is relevant for Cogni Engine context"""
+            # Exclude old completed tasks (keep recently completed within 2 days)
+            if t.status == "completed":
+                completed_at = _normalize_datetime(t.completed_at)
+                if not completed_at or completed_at < two_days_ago:
+                    return False
+
+            updated_at = _normalize_datetime(t.updated_at)
+            deadline = _normalize_datetime(t.deadline)
+
+            # Include if: updated in last week OR deadline within 3 days
+            is_recently_updated = updated_at and updated_at >= one_week_ago
+            is_deadline_near = deadline and deadline_start <= deadline <= deadline_end
+
+            return is_recently_updated or is_deadline_near
+
+        # Filter and sort by updated_at (newest first)
+        tasks = [t for t in all_tasks if _is_relevant_task(t)]
+        tasks.sort(key=lambda t: t.updated_at or now, reverse=True)
+
+        logger.info(
+            f"Cogni Engine context: {len(tasks)} relevant tasks "
+            f"(from {len(all_tasks)} total, filtered by: updated_in_1week OR deadline_within_3days)"
+        )
         
         # Get recent chat history (last 6 messages for better context)
         # Convert to LLM format
@@ -93,23 +112,16 @@ def _convert_messages_to_dict(messages: Sequence[MessageLike]) -> List[Dict[str,
 
 
 def _convert_tasks_to_dict(tasks: List[Task]) -> List[Dict[str, Any]]:
-    """Convert Task objects to dict format for LLM"""
-    task_list = [
+    """Convert Task objects to minimal dict format for LLM decision"""
+    return [
         {
             "id": task.id,
             "title": task.title,
             "deadline": task.deadline.isoformat() if task.deadline else None,
             "status": task.status,
-            "progress": task.progress,
-            "source_note_id": task.source_note_id,
-            "created_at": task.created_at.isoformat(),
         }
         for task in tasks
     ]
-    
-    # Sort by source_note_id and id
-    task_list.sort(key=lambda x: (x["source_note_id"] or 0, x["id"]))
-    return task_list
 
 
 def _convert_tasks_to_simple_dict(tasks: List[Task]) -> List[Dict[str, Any]]:
@@ -132,12 +144,12 @@ async def _call_llm_for_decision(
 ) -> EngineDecision:
     """Call LLM to make engine decision (focus + timer)"""
 
-    current_datetime = get_current_datetime_ja()
+    current_datetime = datetime.now(timezone.utc).isoformat()
     messages = [
         {"role": "system", "content": ENGINE_SYSTEM_PROMPT},
         {
-            "role": "user", 
-            "content": f"現在の日時: {current_datetime}\n\n"
+            "role": "user",
+            "content": f"Current datetime (UTC): {current_datetime}\n\n"
                       f"Chat history: {json.dumps(chat_history, ensure_ascii=False)}\n\n"
                       f"Tasks: {json.dumps(task_list, ensure_ascii=False)}"
         }
@@ -145,7 +157,7 @@ async def _call_llm_for_decision(
 
     try:
         logger.info(f"Calling LLM with {len(chat_history)} messages and {len(task_list)} tasks")
-        llm_service = LLMService(model="gpt-5-mini")
+        llm_service = LLMService(model="gpt-5-mini", temperature=0.3)
         decision = await llm_service.structured_invoke(messages, EngineDecision)
         logger.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
         return decision

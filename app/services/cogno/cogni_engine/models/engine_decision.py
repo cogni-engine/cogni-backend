@@ -27,8 +27,8 @@ class EngineDecision(BaseModel):
         description=(
             "ID of the task to mark as completed. "
             "Set ONLY when user explicitly indicates task completion with phrases like "
-            "'終わった' (finished), '完了した' (completed), 'できた' (done). "
-            "Do NOT set for mere progress reports or casual 'やった' (did it). "
+            "'finished', 'completed', 'done'. "
+            "Do NOT set for mere progress reports or casual 'worked on it'. "
             "Be strict in judgment."
         )
     )

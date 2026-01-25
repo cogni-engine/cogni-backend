@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app.config import supabase
 from app.services.note_to_task import generate_tasks_from_note
 from app.services.task_to_notification import generate_notifications_from_tasks_batch
@@ -560,3 +560,96 @@ async def execute_ai_tasks_local():
         user_id_filter=DEV_USER_IDS,
         exclude_user_ids=False
     )
+
+
+@router.post("/execute-ai-task/{task_id}")
+async def execute_ai_task_by_id(task_id: int):
+    """
+    特定のtask_idでAIタスクを実行するエンドポイント
+    
+    Args:
+        task_id: 実行するタスクのID
+    
+    Returns:
+        実行結果の統計情報
+    """
+    logger = logging.getLogger(__name__)
+    logger.info(f"🔄 Executing AI task by ID: {task_id}")
+    
+    # TaskRepositoryとTaskResultRepository、AINotificationRepositoryを初期化
+    task_repo = TaskRepository(supabase)
+    task_result_repo = TaskResultRepository(supabase)
+    notification_repo = AINotificationRepository(supabase)
+    
+    # タスクを取得
+    task = await task_repo.find_by_id(task_id)
+    
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    # AIタスクかどうかチェック
+    if not task.is_ai_task:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Task {task_id} is not an AI task (is_ai_task=False)"
+        )
+    
+    # アクティブかどうかチェック
+    if not task.is_recurring_task_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task {task_id} is not active (is_recurring_task_active=False)"
+        )
+    
+    try:
+        logger.info(f"🤖 Executing AI task {task.id}: {task.title}")
+        
+        # AIタスクを実行
+        result_title, result_text = await execute_ai_task(task)
+        
+        # 結果をtask_resultsに保存
+        task_result_create = TaskResultCreate(
+            task_id=task.id,
+            result_title=result_title,
+            result_text=result_text,
+            executed_at=datetime.now(timezone.utc)
+        )
+        
+        saved_result = await task_result_repo.create(task_result_create)
+        logger.info(f"✅ Task {task.id} executed and saved: result_id={saved_result.id}")
+        
+        # 完了通知を生成
+        notification_created = False
+        if task.next_run_time:
+            due_date = task.next_run_time
+            
+            try:
+                notification = await generate_completion_notification(
+                    task=task,
+                    result_title=result_title,
+                    result_text=result_text,
+                    due_date=due_date,
+                    task_result_id=saved_result.id
+                )
+                
+                # 通知を保存
+                saved_notification = await notification_repo.create(notification)
+                notification_created = True
+                
+                logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
+            except Exception as e:
+                logger.error(f"Failed to create completion notification for task {task.id}: {e}")
+        else:
+            logger.warning(f"Task {task.id}: next_run_time is None, skipping notification creation")
+        
+        return {
+            "status": "ok",
+            "task_id": task.id,
+            "task_title": task.title,
+            "result_id": saved_result.id,
+            "notification_created": notification_created
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error executing AI task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute task: {str(e)}")

@@ -1,5 +1,5 @@
 """Prompts for AI task executor"""
-from .executor_prompt import executor_prompt_template
+from .completion_notification_prompt import completion_notification_prompt_template
 
-__all__ = ["executor_prompt_template"]
+__all__ = ["completion_notification_prompt_template"]
 

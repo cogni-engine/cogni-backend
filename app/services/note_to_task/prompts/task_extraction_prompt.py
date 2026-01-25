@@ -10,7 +10,7 @@ prompt_template = ChatPromptTemplate.from_messages([
 Follow these rules strictly.
 
 === CORE RULES ===
-- Include the Note content verbatim, word-for-word, without omission.
+- Include relevant Note content plus shared context across tasks.
 - Even fragmented or memo-style text must be fully included.
 - Never summarize or delete information.
 - Prioritize completeness over brevity.
@@ -88,7 +88,7 @@ This reasoning must match next_run_time.)
 - Avoid unnecessary task proliferation.
 
 === ABSOLUTE REQUIREMENT ===
-Every piece of Note content must appear verbatim in at least one task’s 【Note Content】 section.
+Every piece of Note content must appear in at least one task's【Note Content】section (distribute relevant parts + shared context).
 """
     ),
     (
