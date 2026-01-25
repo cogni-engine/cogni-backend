@@ -32,6 +32,11 @@ def get_allowed_origins() -> list[str]:
     if client_url:
         origins.append(client_url)
     
+    # Add Supabase URL if set
+    supabase_url = os.getenv("SUPABASE_URL")
+    if supabase_url:
+        origins.append(supabase_url)
+    
     # Add additional origins from ALLOWED_ORIGINS env var (comma-separated)
     allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
     if allowed_origins_env:

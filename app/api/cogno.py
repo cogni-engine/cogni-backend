@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Cookie
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -11,6 +11,7 @@ from app.services.cogno.cogni_engine.engine_service import make_engine_decision,
 from app.services.cogno.conversation.conversation_service import conversation_stream
 from app.models.ai_message import MessageRole
 from typing import List
+from app.auth import get_current_user_id
 
 router = APIRouter(prefix="/api/cogno", tags=["cogno"])
 
@@ -57,7 +58,7 @@ class ConversationStreamRequest(BaseModel):
 async def stream_conversation(
     request: ConversationStreamRequest, 
     background_tasks: BackgroundTasks,
-    current_user_id: Optional[str] = Cookie(None)
+    current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Stream a conversation with Cogno AI.
@@ -69,7 +70,7 @@ async def stream_conversation(
     4. If task_to_complete_id: Check if 2nd consecutive -> complete task in background
     5. Conversation AI responds with timer info in meta
     """
-    logging.info(f"current_user_id from cookie: {current_user_id}")
+    logging.info(f"current_user_id from JWT: {current_user_id}")
     
     # Handle notification trigger
     if request.notification_id:
@@ -114,10 +115,8 @@ async def stream_conversation(
             }
         )
 
-    if not current_user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
     # Make engine decision with current user message (also returns pending tasks)
+    # current_user_id is guaranteed to be set by Depends(get_current_user_id)
     decision, pending_tasks = await make_engine_decision(current_user_id, request.messages)
     logging.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}, task_to_complete_id={decision.task_to_complete_id}, pending_tasks_count={len(pending_tasks)}")
     
@@ -205,10 +204,10 @@ async def stream_conversation(
 async def get_thread_messages(
     thread_id: int,
     since: Optional[int] = Query(None, description="Only return messages after this message ID"),
-    current_user_id: Optional[str] = Cookie(None)
+    current_user_id: str = Depends(get_current_user_id)
 ):
     """Get messages for a specific thread (optionally since a given message ID)"""
-    logging.info(f"current_user_id from cookie: {current_user_id}")
+    logging.info(f"current_user_id from JWT: {current_user_id}")
     
     from app.infra.supabase.repositories.ai_messages import AIMessageRepository
     from app.config import supabase
