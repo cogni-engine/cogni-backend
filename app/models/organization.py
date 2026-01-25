@@ -2,14 +2,8 @@
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
-from enum import Enum
 
-
-class SubscriptionPlanType(str, Enum):
-    """Subscription plan type enum"""
-    FREE = "free"
-    PRO = "pro"
-    BUSINESS = "business"
+from app.features.billing.domain import SubscriptionPlanType
 
 
 class OrganizationBase(BaseModel):

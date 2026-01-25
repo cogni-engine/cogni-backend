@@ -1,11 +1,12 @@
-"""Payment service for handling Stripe webhooks and subscription management"""
+"""Webhook service for handling Stripe webhooks and subscription management"""
 import logging
 import json
 from datetime import datetime, timezone
 import stripe
 from app.config import STRIPE_SECRET_KEY, STRIPE_PRICE_ID_PRO, STRIPE_PRICE_ID_BUSINESS, supabase
 from app.infra.supabase.repositories.organizations import OrganizationRepository
-from app.models.organization import OrganizationCreate, OrganizationUpdate, SubscriptionPlanType
+from app.models.organization import OrganizationCreate, OrganizationUpdate
+from app.features.billing.domain import SubscriptionPlanType
 from app.services.organizations import OrganizationService
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 stripe.api_key = STRIPE_SECRET_KEY
 
 
-class PaymentService:
+class BillingWebhookService:
     """Service for handling Stripe payment and subscription webhooks"""
     
     def __init__(self, org_repo: OrganizationRepository):
@@ -45,7 +46,7 @@ class PaymentService:
             return SubscriptionPlanType.BUSINESS
         else:
             print(f"   ⚠️  Unknown price_id, defaulting to PRO")
-            logger.warning(f"PaymentService: Unknown price_id {price_id}, defaulting to PRO")
+            logger.warning(f"BillingWebhookService: Unknown price_id {price_id}, defaulting to PRO")
             return SubscriptionPlanType.PRO
     
     async def handle_webhook_event(self, event_type: str, event_data: dict) -> None:
@@ -57,12 +58,12 @@ class PaymentService:
             event_data: Stripe event data object
         """
         print(f"\n{'='*60}")
-        print(f"🔔 PAYMENT SERVICE: Handling webhook event")
+        print(f"🔔 BILLING WEBHOOK SERVICE: Handling webhook event")
         print(f"   Event Type: {event_type}")
         print(f"   Event Data Keys: {list(event_data.keys())}")
         print(f"{'='*60}\n")
         
-        logger.info(f"PaymentService: Handling webhook event {event_type}")
+        logger.info(f"BillingWebhookService: Handling webhook event {event_type}")
         logger.debug(f"Event data: {json.dumps(event_data, indent=2, default=str)}")
         
         try:
@@ -88,14 +89,14 @@ class PaymentService:
             
             else:
                 print(f"⚠️  Unhandled event type: {event_type}")
-                logger.info(f"PaymentService: Unhandled event type {event_type}")
+                logger.info(f"BillingWebhookService: Unhandled event type {event_type}")
         
         except Exception as e:
-            print(f"\n❌ ERROR in PaymentService.handle_webhook_event:")
+            print(f"\n❌ ERROR in BillingWebhookService.handle_webhook_event:")
             print(f"   Event Type: {event_type}")
             print(f"   Error: {str(e)}")
             print(f"{'='*60}\n")
-            logger.error(f"PaymentService: Error handling event {event_type}: {e}", exc_info=True)
+            logger.error(f"BillingWebhookService: Error handling event {event_type}: {e}", exc_info=True)
             raise
     
     async def handle_checkout_session_completed(self, session: dict) -> None:
@@ -113,7 +114,7 @@ class PaymentService:
         print(f"   Session ID: {session_id}")
         print(f"{'─'*60}")
         
-        logger.info(f"PaymentService: Processing checkout.session.completed for session {session_id}")
+        logger.info(f"BillingWebhookService: Processing checkout.session.completed for session {session_id}")
         
         customer_id = session.get("customer")
         subscription_id = session.get("subscription")
@@ -125,13 +126,13 @@ class PaymentService:
         if not customer_id:
             print(f"   ⚠️  WARNING: No customer_id in checkout.session.completed")
             print(f"   ℹ️  This is expected - subscription.updated will handle the actual processing")
-            logger.info(f"PaymentService: checkout.session.completed has no customer_id (incomplete event)")
+            logger.info(f"BillingWebhookService: checkout.session.completed has no customer_id (incomplete event)")
             return
         
         if not subscription_id:
             print(f"   ⚠️  WARNING: No subscription_id in checkout.session.completed")
             print(f"   ℹ️  This is expected - subscription.updated will handle the actual processing")
-            logger.info(f"PaymentService: checkout.session.completed has no subscription_id (incomplete event)")
+            logger.info(f"BillingWebhookService: checkout.session.completed has no subscription_id (incomplete event)")
             return
         
         # If we have both, check if organization exists, if not create a minimal one
@@ -141,7 +142,7 @@ class PaymentService:
         
         if not org:
             print(f"   📝 Creating minimal organization (will be updated by subscription.updated)...")
-            logger.info(f"PaymentService: Creating minimal organization for customer {customer_id}")
+            logger.info(f"BillingWebhookService: Creating minimal organization for customer {customer_id}")
             
             # Create minimal organization - subscription.updated will fill in the details
             org_name = f"Organization {customer_id[:8]}"
@@ -160,11 +161,11 @@ class PaymentService:
             print(f"      - Customer ID: {org.stripe_customer_id}")
             print(f"      - Subscription ID: {org.stripe_subscription_id}")
             print(f"   ℹ️  Full details will be updated by subscription.updated event")
-            logger.info(f"PaymentService: Created minimal organization {org.id}, waiting for subscription.updated")
+            logger.info(f"BillingWebhookService: Created minimal organization {org.id}, waiting for subscription.updated")
         else:
             print(f"   ✅ Organization already exists: ID={org.id}")
             print(f"   ℹ️  subscription.updated will update the details")
-            logger.info(f"PaymentService: Organization {org.id} exists, subscription.updated will update it")
+            logger.info(f"BillingWebhookService: Organization {org.id} exists, subscription.updated will update it")
         
         print(f"{'─'*60}\n")
     
@@ -187,15 +188,15 @@ class PaymentService:
         print(f"   Subscription ID: {subscription_id}")
         print(f"{'─'*60}")
         
-        logger.info(f"PaymentService: Processing customer.subscription.updated for subscription {subscription_id}")
-        logger.debug(f"PaymentService: Subscription data: {json.dumps(subscription, indent=2, default=str)}")
+        logger.info(f"BillingWebhookService: Processing customer.subscription.updated for subscription {subscription_id}")
+        logger.debug(f"BillingWebhookService: Subscription data: {json.dumps(subscription, indent=2, default=str)}")
         
         customer_id = subscription.get("customer")
         print(f"   Customer ID: {customer_id}")
         
         if not subscription_id:
             print(f"   ⚠️  WARNING: Missing subscription_id")
-            logger.warning("PaymentService: Missing subscription_id in subscription update event")
+            logger.warning("BillingWebhookService: Missing subscription_id in subscription update event")
             return
         
         # Find organization by subscription ID or customer ID
@@ -208,7 +209,7 @@ class PaymentService:
         if not org:
             print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
             print(f"   📝 Creating new organization...")
-            logger.warning(f"PaymentService: Organization not found, creating new one for subscription {subscription_id}")
+            logger.warning(f"BillingWebhookService: Organization not found, creating new one for subscription {subscription_id}")
             
             # Create new organization if it doesn't exist
             org_name = f"Organization {customer_id[:8] if customer_id else subscription_id[:8]}"
@@ -293,10 +294,10 @@ class PaymentService:
             print(f"      - Plan Type: {updated_org.plan_type.value}")
             print(f"      - Cancel at Period End: {updated_org.cancel_at_period_end}")
             print(f"      - Current Period End: {updated_org.current_period_end}")
-            logger.info(f"PaymentService: Updated organization {org.id} subscription details")
+            logger.info(f"BillingWebhookService: Updated organization {org.id} subscription details")
         else:
             print(f"   ❌ Failed to update organization")
-            logger.error(f"PaymentService: Failed to update organization {org.id}")
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
         
         print(f"{'─'*60}\n")
     
@@ -316,11 +317,11 @@ class PaymentService:
         print(f"   Subscription ID: {subscription_id}")
         print(f"{'─'*60}")
         
-        logger.info(f"PaymentService: Processing customer.subscription.deleted for subscription {subscription_id}")
+        logger.info(f"BillingWebhookService: Processing customer.subscription.deleted for subscription {subscription_id}")
         
         if not subscription_id:
             print(f"   ⚠️  WARNING: Missing subscription_id")
-            logger.warning("PaymentService: Missing subscription_id in subscription deleted event")
+            logger.warning("BillingWebhookService: Missing subscription_id in subscription deleted event")
             return
         
         print(f"   🔍 Looking up organization...")
@@ -328,7 +329,7 @@ class PaymentService:
         
         if not org:
             print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
-            logger.warning(f"PaymentService: Organization not found for subscription {subscription_id}")
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
             return
         
         print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
@@ -359,7 +360,7 @@ class PaymentService:
             print(f"      - Subscription ID (kept): {updated_org.stripe_subscription_id}")
             print(f"      - Customer ID (kept): {updated_org.stripe_customer_id}")
             print(f"      - Current Period End (kept): {updated_org.current_period_end}")
-            logger.info(f"PaymentService: Set organization {org.id} to FREE plan after subscription deletion")
+            logger.info(f"BillingWebhookService: Set organization {org.id} to FREE plan after subscription deletion")
             
             # Auto-deactivate all non-owner members (free plan = 1 seat = owner only)
             print(f"\n   🔄 Auto-deactivating non-owner members...")
@@ -367,12 +368,12 @@ class PaymentService:
             
             if deactivated_count > 0:
                 print(f"   ✅ Deactivated {deactivated_count} non-owner member(s)")
-                logger.info(f"PaymentService: Deactivated {deactivated_count} members for organization {org.id}")
+                logger.info(f"BillingWebhookService: Deactivated {deactivated_count} members for organization {org.id}")
             else:
                 print(f"   ℹ️  No members to deactivate (organization only had owner)")
         else:
             print(f"   ❌ Failed to update organization")
-            logger.error(f"PaymentService: Failed to update organization {org.id}")
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
         
         print(f"{'─'*60}\n")
     
@@ -393,14 +394,14 @@ class PaymentService:
         print(f"   Invoice ID: {invoice_id}")
         print(f"{'─'*60}")
         
-        logger.info(f"PaymentService: Processing invoice.payment_succeeded for invoice {invoice_id}")
+        logger.info(f"BillingWebhookService: Processing invoice.payment_succeeded for invoice {invoice_id}")
         
         subscription_id = invoice.get("subscription")
         print(f"   Subscription ID: {subscription_id}")
         
         if not subscription_id:
             print(f"   ℹ️  Invoice has no subscription (one-time payment), skipping")
-            logger.info("PaymentService: Invoice has no subscription (one-time payment)")
+            logger.info("BillingWebhookService: Invoice has no subscription (one-time payment)")
             return
         
         print(f"   🔍 Looking up organization...")
@@ -408,7 +409,7 @@ class PaymentService:
         
         if not org:
             print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
-            logger.warning(f"PaymentService: Organization not found for subscription {subscription_id}")
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
             return
         
         print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
@@ -431,7 +432,7 @@ class PaymentService:
             period_end = invoice.get("period_end")
             if period_end:
                 print(f"   ⚠️  Using fallback invoice.period_end (not recommended)")
-                logger.warning(f"PaymentService: Using fallback invoice.period_end for invoice {invoice_id}")
+                logger.warning(f"BillingWebhookService: Using fallback invoice.period_end for invoice {invoice_id}")
         
         if period_end:
             current_period_end = datetime.fromtimestamp(period_end, tz=timezone.utc)
@@ -446,13 +447,13 @@ class PaymentService:
             if updated_org:
                 print(f"   ✅ Successfully updated period end for organization {org.id}")
                 print(f"      - New Period End: {updated_org.current_period_end}")
-                logger.info(f"PaymentService: Updated period end for organization {org.id}")
+                logger.info(f"BillingWebhookService: Updated period end for organization {org.id}")
             else:
                 print(f"   ❌ Failed to update organization")
-                logger.error(f"PaymentService: Failed to update organization {org.id}")
+                logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
         else:
             print(f"   ⚠️  No period_end found in invoice, skipping update")
-            logger.warning(f"PaymentService: No period_end found in invoice {invoice_id}")
+            logger.warning(f"BillingWebhookService: No period_end found in invoice {invoice_id}")
         
         print(f"{'─'*60}\n")
     
@@ -464,7 +465,7 @@ class PaymentService:
         print(f"   Invoice ID: {invoice_id}")
         print(f"{'─'*60}")
         
-        logger.warning(f"PaymentService: Processing invoice.payment_failed for invoice {invoice_id}")
+        logger.warning(f"BillingWebhookService: Processing invoice.payment_failed for invoice {invoice_id}")
         
         subscription_id = invoice.get("subscription")
         customer_id = invoice.get("customer")
@@ -474,7 +475,7 @@ class PaymentService:
         
         if not subscription_id:
             print(f"   ℹ️  Invoice has no subscription, skipping")
-            logger.info("PaymentService: Invoice has no subscription")
+            logger.info("BillingWebhookService: Invoice has no subscription")
             return
         
         print(f"   🔍 Looking up organization...")
@@ -485,7 +486,7 @@ class PaymentService:
         
         if not org:
             print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
-            logger.warning(f"PaymentService: Organization not found for subscription {subscription_id}")
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
             return
         
         print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
@@ -495,8 +496,7 @@ class PaymentService:
         print(f"   💡 Note: Consider adding payment_failed_at field or status tracking")
         
         # Log payment failure - you might want to send notifications or update status
-        logger.warning(f"PaymentService: Payment failed for organization {org.id}, subscription {subscription_id}")
+        logger.warning(f"BillingWebhookService: Payment failed for organization {org.id}, subscription {subscription_id}")
         # Note: You might want to add a payment_failed_at field or status field to track this
         
         print(f"{'─'*60}\n")
-

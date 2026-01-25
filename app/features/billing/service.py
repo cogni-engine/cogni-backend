@@ -474,4 +474,3 @@ class BillingService:
                 status_code=400,
                 detail="No Stripe customer found for this organization"
             )
-
