@@ -16,11 +16,19 @@ class LLMService:
             model: Model name to use (default: "gpt-5-mini")
             temperature: Sampling temperature (default: 0.7)
         """
-        self.llm = ChatOpenAI(
-            model=model,
-            temperature=temperature,
-            streaming=True
-        )
+        # Some models (like o1 series) don't support custom temperature
+        # Only set temperature if the model supports it
+        llm_kwargs = {
+            "model": model,
+            "streaming": True
+        }
+        
+        # Only add temperature for models that support it
+        # o1 models and some others only support temperature=1 (default)
+        if not model.startswith("o1") and "gpt-5.1" not in model:
+            llm_kwargs["temperature"] = temperature
+        
+        self.llm = ChatOpenAI(**llm_kwargs)
     
     async def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
         # Convert your dict format to LangChain messages
