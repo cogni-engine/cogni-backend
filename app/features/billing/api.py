@@ -12,7 +12,8 @@ from app.config import (
     CLIENT_URL,
 )
 from app.auth import get_current_user_id
-from app.infra.supabase.repositories.organizations import OrganizationRepository
+from app.features.billing.repositories.organizations import OrganizationRepository
+from app.features.billing.repositories.stripe_events import StripeEventRepository
 from app.features.billing.service import BillingService
 from app.features.billing.webhook_service import BillingWebhookService
 from app.features.billing.schemas import (
@@ -74,10 +75,12 @@ async def stripe_webhook(
     
     Handles:
     - checkout.session.completed: Initial subscription confirmed
-    - customer.subscription.updated: Plan change / seat change / cancellation scheduled / status change
-    - customer.subscription.deleted: Cancellation completed
-    - invoice.payment_succeeded: Renewal success
+    - invoice.payment_succeeded: Payment succeeded
     - invoice.payment_failed: Payment failed
+    - invoice.payment_action_required: Payment action required
+    - customer.subscription.updated: Configuration changes
+    - customer.subscription.deleted: Subscription deleted
+    - charge.dispute.created: Dispute created
     """
     print(f"\n\n{'#'*60}")
     print(f"# STRIPE WEBHOOK RECEIVED")
@@ -110,11 +113,12 @@ async def stripe_webhook(
     
     # Initialize webhook service
     org_repo = OrganizationRepository(supabase)
-    webhook_service = BillingWebhookService(org_repo)
+    stripe_event_repo = StripeEventRepository(supabase)
+    webhook_service = BillingWebhookService(org_repo, stripe_event_repo)
     
     try:
-        # Delegate to webhook service
-        await webhook_service.handle_webhook_event(event_type, event_data)
+        # Delegate to webhook service (pass event_id and raw_event)
+        await webhook_service.handle_webhook_event(event_type, event_data, event_id, event)
         
         print(f"\n✅ Webhook processed successfully")
         print(f"{'#'*60}\n\n")

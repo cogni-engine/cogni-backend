@@ -2,12 +2,15 @@
 import logging
 import json
 from datetime import datetime, timezone
+from typing import Optional
 import stripe
 from app.config import STRIPE_SECRET_KEY, STRIPE_PRICE_ID_PRO, STRIPE_PRICE_ID_BUSINESS, supabase
-from app.infra.supabase.repositories.organizations import OrganizationRepository
-from app.models.organization import OrganizationCreate, OrganizationUpdate
-from app.features.billing.domain import SubscriptionPlanType
-from app.services.organizations import OrganizationService
+from app.features.billing.repositories.organizations import OrganizationRepository
+from app.features.billing.repositories.stripe_events import StripeEventRepository
+from app.features.billing.models.organization import OrganizationCreate, OrganizationUpdate
+from app.features.billing.models.stripe_event import StripeEventCreate
+from app.features.billing.domain import SubscriptionPlanType, SubscriptionStatus
+from app.features.billing.services import OrganizationService
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +21,9 @@ stripe.api_key = STRIPE_SECRET_KEY
 class BillingWebhookService:
     """Service for handling Stripe payment and subscription webhooks"""
     
-    def __init__(self, org_repo: OrganizationRepository):
+    def __init__(self, org_repo: OrganizationRepository, stripe_event_repo: StripeEventRepository):
         self.org_repo = org_repo
+        self.stripe_event_repo = stripe_event_repo
         self.org_service = OrganizationService(org_repo, supabase)
     
     def _get_plan_type_from_price_id(self, price_id: str | None) -> SubscriptionPlanType:
@@ -33,53 +37,82 @@ class BillingWebhookService:
             SubscriptionPlanType based on price_id
         """
         if not price_id:
-            print(f"   ⚠️  No price_id provided, defaulting to PRO")
+            logger.warning(f"BillingWebhookService: No price_id provided, defaulting to PRO")
             return SubscriptionPlanType.PRO
-        
-        print(f"   🔍 Determining plan type from price_id: {price_id}")
         
         if price_id == STRIPE_PRICE_ID_PRO:
-            print(f"   ✅ Matched PRO plan")
             return SubscriptionPlanType.PRO
         elif price_id == STRIPE_PRICE_ID_BUSINESS:
-            print(f"   ✅ Matched BUSINESS plan")
             return SubscriptionPlanType.BUSINESS
         else:
-            print(f"   ⚠️  Unknown price_id, defaulting to PRO")
             logger.warning(f"BillingWebhookService: Unknown price_id {price_id}, defaulting to PRO")
             return SubscriptionPlanType.PRO
     
-    async def handle_webhook_event(self, event_type: str, event_data: dict) -> None:
+    async def _persist_raw_event(self, event_id: str, event_type: str, raw_event: dict) -> None:
+        """
+        Global Rule 2: Persist raw event first
+        
+        Args:
+            event_id: Stripe event ID
+            event_type: Stripe event type
+            raw_event: Full Stripe event object
+        """
+        try:
+            create_data = StripeEventCreate(
+                stripe_event_id=event_id,
+                type=event_type,
+                payload=raw_event
+            )
+            await self.stripe_event_repo.create(create_data)
+            logger.debug(f"BillingWebhookService: Persisted event {event_id} of type {event_type}")
+        except Exception as e:
+            # Log but don't fail - idempotency check will handle duplicates
+            logger.warning(f"BillingWebhookService: Failed to persist event {event_id}: {e}")
+    
+    async def _check_idempotency(self, event_id: str) -> bool:
+        """
+        Global Rule 3: Ensure idempotency using stripe_event_id
+        
+        Returns:
+            True if event was already processed, False otherwise
+        """
+        existing_event = await self.stripe_event_repo.find_by_stripe_event_id(event_id)
+        if existing_event and existing_event.processed_at:
+            logger.info(f"BillingWebhookService: Event {event_id} already processed at {existing_event.processed_at}, skipping")
+            return True
+        return False
+    
+    async def _mark_event_processed(self, event_id: str) -> None:
+        """Mark event as processed by updating processed_at timestamp"""
+        try:
+            await self.stripe_event_repo.mark_as_processed(event_id)
+            logger.debug(f"BillingWebhookService: Marked event {event_id} as processed")
+        except Exception as e:
+            logger.warning(f"BillingWebhookService: Failed to mark event {event_id} as processed: {e}")
+    
+    async def handle_webhook_event(self, event_type: str, event_data: dict, event_id: str, raw_event: dict) -> None:
         """
         Route webhook events to appropriate handlers
         
         Args:
             event_type: Stripe event type (e.g., 'checkout.session.completed')
             event_data: Stripe event data object
+            event_id: Stripe event ID for idempotency
+            raw_event: Full Stripe event object for persistence
         """
-        print(f"\n{'='*60}")
-        print(f"🔔 BILLING WEBHOOK SERVICE: Handling webhook event")
-        print(f"   Event Type: {event_type}")
-        print(f"   Event Data Keys: {list(event_data.keys())}")
-        print(f"{'='*60}\n")
+        logger.info(f"BillingWebhookService: Handling webhook event {event_type} (ID: {event_id})")
         
-        logger.info(f"BillingWebhookService: Handling webhook event {event_type}")
-        logger.debug(f"Event data: {json.dumps(event_data, indent=2, default=str)}")
+        # Global Rule 2: Persist raw event first
+        await self._persist_raw_event(event_id, event_type, raw_event)
+        
+        # Global Rule 3: Ensure idempotency
+        if await self._check_idempotency(event_id):
+            logger.info(f"BillingWebhookService: Event {event_id} already processed, skipping")
+            return
         
         try:
             if event_type == "checkout.session.completed":
                 await self.handle_checkout_session_completed(event_data)
-            
-            elif event_type == "customer.subscription.created":
-                # subscription.created fires on first checkout
-                # Treat it the same as subscription.updated
-                await self.handle_subscription_updated(event_data)
-            
-            elif event_type == "customer.subscription.updated":
-                await self.handle_subscription_updated(event_data)
-            
-            elif event_type == "customer.subscription.deleted":
-                await self.handle_subscription_deleted(event_data)
             
             elif event_type == "invoice.payment_succeeded":
                 await self.handle_invoice_payment_succeeded(event_data)
@@ -87,416 +120,372 @@ class BillingWebhookService:
             elif event_type == "invoice.payment_failed":
                 await self.handle_invoice_payment_failed(event_data)
             
+            elif event_type == "invoice.payment_action_required":
+                await self.handle_invoice_payment_action_required(event_data)
+            
+            elif event_type == "customer.subscription.updated":
+                await self.handle_subscription_updated(event_data)
+            
+            elif event_type == "customer.subscription.deleted":
+                await self.handle_subscription_deleted(event_data)
+            
+            elif event_type == "charge.dispute.created":
+                await self.handle_charge_dispute_created(event_data)
+            
             else:
-                print(f"⚠️  Unhandled event type: {event_type}")
-                logger.info(f"BillingWebhookService: Unhandled event type {event_type}")
+                # Global Rule 6: Return 200 even for ignored events
+                logger.info(f"BillingWebhookService: Unhandled event type {event_type} (stored but ignored)")
         
         except Exception as e:
-            print(f"\n❌ ERROR in BillingWebhookService.handle_webhook_event:")
-            print(f"   Event Type: {event_type}")
-            print(f"   Error: {str(e)}")
-            print(f"{'='*60}\n")
             logger.error(f"BillingWebhookService: Error handling event {event_type}: {e}", exc_info=True)
             raise
+        finally:
+            # Mark event as processed
+            await self._mark_event_processed(event_id)
     
     async def handle_checkout_session_completed(self, session: dict) -> None:
         """
-        Handle checkout.session.completed - incomplete event
+        Handle checkout.session.completed - Initial subscription creation
         
-        Note: checkout.session.completed is an incomplete event.
-        customer or subscription may be missing.
-        The master event is subscription.updated, which will handle the actual processing.
-        This handler only logs the event and creates a minimal organization if needed.
+        This is the FIRST moment billing state is allowed to change.
+        
+        Preconditions:
+        - Event has not been processed before (handled by idempotency check)
+        - Session mode = subscription
         """
-        session_id = session.get('id', 'unknown')
-        print(f"\n{'─'*60}")
-        print(f"📝 Processing checkout.session.completed (incomplete event)")
-        print(f"   Session ID: {session_id}")
-        print(f"{'─'*60}")
+        logger.info(f"BillingWebhookService: Processing checkout.session.completed")
         
-        logger.info(f"BillingWebhookService: Processing checkout.session.completed for session {session_id}")
+        # Precondition: Session mode = subscription
+        if session.get("mode") != "subscription":
+            logger.info(f"BillingWebhookService: Session mode is not 'subscription', skipping")
+            return
         
-        customer_id = session.get("customer")
+        # Step 1: Extract organization_id from metadata
+        metadata = session.get("metadata", {})
+        organization_id = metadata.get("organization_id")
+        
+        if not organization_id:
+            logger.warning(f"BillingWebhookService: No organization_id in metadata, cannot process")
+            return
+        
+        # Step 2: Retrieve the Subscription object from Stripe
         subscription_id = session.get("subscription")
-        
-        print(f"   Customer ID: {customer_id}")
-        print(f"   Subscription ID: {subscription_id}")
-        
-        # checkout.session.completed is incomplete - customer/subscription may be missing
-        if not customer_id:
-            print(f"   ⚠️  WARNING: No customer_id in checkout.session.completed")
-            print(f"   ℹ️  This is expected - subscription.updated will handle the actual processing")
-            logger.info(f"BillingWebhookService: checkout.session.completed has no customer_id (incomplete event)")
-            return
-        
         if not subscription_id:
-            print(f"   ⚠️  WARNING: No subscription_id in checkout.session.completed")
-            print(f"   ℹ️  This is expected - subscription.updated will handle the actual processing")
-            logger.info(f"BillingWebhookService: checkout.session.completed has no subscription_id (incomplete event)")
+            logger.warning(f"BillingWebhookService: No subscription_id in checkout session")
             return
         
-        # If we have both, check if organization exists, if not create a minimal one
-        # The actual subscription details will be updated by subscription.updated
-        print(f"   🔍 Checking if organization exists for customer {customer_id}...")
-        org = await self.org_repo.find_by_stripe_customer_id(customer_id)
+        try:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+        except Exception as e:
+            logger.error(f"BillingWebhookService: Failed to retrieve subscription {subscription_id}: {e}")
+            raise
         
-        if not org:
-            print(f"   📝 Creating minimal organization (will be updated by subscription.updated)...")
-            logger.info(f"BillingWebhookService: Creating minimal organization for customer {customer_id}")
-            
-            # Create minimal organization - subscription.updated will fill in the details
-            org_name = f"Organization {customer_id[:8]}"
-            create_data = OrganizationCreate(
-                name=org_name,
-                stripe_customer_id=customer_id,
-                stripe_subscription_id=subscription_id,
-                seat_count=1,
-                active_member_count=0,
-                plan_type=SubscriptionPlanType.PRO  # Will be updated by subscription.updated
-            )
-            
-            org = await self.org_repo.create(create_data)
-            print(f"   ✅ Created minimal organization {org.id}")
-            print(f"      - Name: {org.name}")
-            print(f"      - Customer ID: {org.stripe_customer_id}")
-            print(f"      - Subscription ID: {org.stripe_subscription_id}")
-            print(f"   ℹ️  Full details will be updated by subscription.updated event")
-            logger.info(f"BillingWebhookService: Created minimal organization {org.id}, waiting for subscription.updated")
-        else:
-            print(f"   ✅ Organization already exists: ID={org.id}")
-            print(f"   ℹ️  subscription.updated will update the details")
-            logger.info(f"BillingWebhookService: Organization {org.id} exists, subscription.updated will update it")
+        # Step 3: Read subscription data
+        price_id = subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")
+        trial_end = subscription.get("trial_end")
+        current_period_end = subscription.get("current_period_end")
         
-        print(f"{'─'*60}\n")
-    
-    async def handle_subscription_updated(self, subscription: dict) -> None:
-        """
-        Handle customer.subscription.updated and customer.subscription.created - MASTER EVENT
-        
-        This is the master event for subscription changes:
-        - Initial subscription creation (subscription.created)
-        - Plan changes
-        - Seat/quantity changes
-        - Cancellation scheduled
-        - Status changes
-        
-        Note: Does NOT update current_period_end (that's handled by invoice.payment_succeeded)
-        """
-        subscription_id = subscription.get('id', 'unknown')
-        print(f"\n{'─'*60}")
-        print(f"📝 Processing customer.subscription.updated/created (MASTER EVENT)")
-        print(f"   Subscription ID: {subscription_id}")
-        print(f"{'─'*60}")
-        
-        logger.info(f"BillingWebhookService: Processing customer.subscription.updated for subscription {subscription_id}")
-        logger.debug(f"BillingWebhookService: Subscription data: {json.dumps(subscription, indent=2, default=str)}")
-        
-        customer_id = subscription.get("customer")
-        print(f"   Customer ID: {customer_id}")
-        
-        if not subscription_id:
-            print(f"   ⚠️  WARNING: Missing subscription_id")
-            logger.warning("BillingWebhookService: Missing subscription_id in subscription update event")
-            return
-        
-        # Find organization by subscription ID or customer ID
-        print(f"   🔍 Looking up organization...")
-        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
-        if not org and customer_id:
-            print(f"   🔍 Not found by subscription_id, trying customer_id...")
-            org = await self.org_repo.find_by_stripe_customer_id(customer_id)
-        
-        if not org:
-            print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
-            print(f"   📝 Creating new organization...")
-            logger.warning(f"BillingWebhookService: Organization not found, creating new one for subscription {subscription_id}")
-            
-            # Create new organization if it doesn't exist
-            org_name = f"Organization {customer_id[:8] if customer_id else subscription_id[:8]}"
-            create_data = OrganizationCreate(
-                name=org_name,
-                stripe_customer_id=customer_id,
-                stripe_subscription_id=subscription_id,
-                seat_count=1,
-                active_member_count=0,
-                plan_type=SubscriptionPlanType.PRO  # Will be updated below
-            )
-            org = await self.org_repo.create(create_data)
-            print(f"   ✅ Created organization {org.id}")
-        
-        print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
-        
-        # Extract updated information
-        subscription_item_id = None
-        seat_count = 1
-        price_id = None
-        
-        if subscription.get("items", {}).get("data"):
-            item = subscription["items"]["data"][0]
-            subscription_item_id = item.get("id")
-            seat_count = item.get("quantity", 1)
-            price_id = item.get("price", {}).get("id")
-            print(f"   Subscription Item ID: {subscription_item_id}")
-            print(f"   Seat Count: {seat_count}")
-            print(f"   Price ID: {price_id}")
-        
-        # Determine plan type from price_id (not metadata)
+        # Step 4: Map price.id → plan_type
         plan_type = self._get_plan_type_from_price_id(price_id)
-        print(f"   Plan Type: {plan_type.value}")
         
-        # Check both cancel_at_period_end (old API) and cancel_at (new API)
-        cancel_at_period_end = subscription.get("cancel_at_period_end")
-        cancel_at = subscription.get("cancel_at")  # Unix timestamp for scheduled cancellation
+        # Determine status
+        if trial_end and trial_end > datetime.now(timezone.utc).timestamp():
+            status = SubscriptionStatus.TRIALING
+        else:
+            status = SubscriptionStatus.ACTIVE
         
-        # Stripe uses cancel_at for Customer Portal cancellations
-        # If cancel_at is set, treat it as cancel_at_period_end=True
-        if cancel_at is not None:
-            print(f"   Cancel At: {cancel_at} (scheduled cancellation detected)")
-            cancel_at_period_end = True  # Override to True
+        # Convert timestamps to datetime
+        trial_end_dt = None
+        if trial_end:
+            trial_end_dt = datetime.fromtimestamp(trial_end, tz=timezone.utc)
         
-        print(f"   Cancel at Period End: {cancel_at_period_end}")
+        current_period_end_dt = None
+        if current_period_end:
+            current_period_end_dt = datetime.fromtimestamp(current_period_end, tz=timezone.utc)
         
-        # Extract current_period_end from subscription
-        # Try subscription level first, then fall back to item level
-        current_period_end = None
-        
-        # Method 1: From subscription object directly
-        if subscription.get("current_period_end"):
-            current_period_end = datetime.fromtimestamp(
-                subscription["current_period_end"], tz=timezone.utc
-            )
-            print(f"   Current Period End: {current_period_end} (from subscription)")
-        # Method 2: From subscription items
-        elif subscription.get("items", {}).get("data") and len(subscription["items"]["data"]) > 0:
-            item_period_end = subscription["items"]["data"][0].get("current_period_end")
-            if item_period_end:
-                current_period_end = datetime.fromtimestamp(item_period_end, tz=timezone.utc)
-                print(f"   Current Period End: {current_period_end} (from item)")
-        
-        if not current_period_end:
-            print(f"   ⚠️  No current_period_end found in subscription or items")
-        
-        print(f"   📝 Updating organization...")
+        # DB updates
+        customer_id = session.get("customer")
         update_data = OrganizationUpdate(
-            stripe_subscription_id=subscription_id,  # Ensure it's set
-            stripe_subscription_item_id=subscription_item_id,
-            seat_count=seat_count,
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=subscription_id,
             plan_type=plan_type,
-            cancel_at_period_end=cancel_at_period_end,
-            current_period_end=current_period_end  # Set from subscription
-        )
-        
-        updated_org = await self.org_repo.update(org.id, update_data)
-        if updated_org:
-            print(f"   ✅ Successfully updated organization {org.id}")
-            print(f"      - Subscription ID: {updated_org.stripe_subscription_id}")
-            print(f"      - Seat Count: {updated_org.seat_count}")
-            print(f"      - Plan Type: {updated_org.plan_type.value}")
-            print(f"      - Cancel at Period End: {updated_org.cancel_at_period_end}")
-            print(f"      - Current Period End: {updated_org.current_period_end}")
-            logger.info(f"BillingWebhookService: Updated organization {org.id} subscription details")
-        else:
-            print(f"   ❌ Failed to update organization")
-            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
-        
-        print(f"{'─'*60}\n")
-    
-    async def handle_subscription_deleted(self, subscription: dict) -> None:
-        """
-        Handle customer.subscription.deleted - cancellation completed
-        
-        Best practice (like Slack/Linear/Notion):
-        - Set plan_type = FREE
-        - Set seat_count = 1
-        - Keep stripe_subscription_id for analytics
-        - Clear subscription_item_id and cancel_at_period_end
-        """
-        subscription_id = subscription.get('id', 'unknown')
-        print(f"\n{'─'*60}")
-        print(f"📝 Processing customer.subscription.deleted")
-        print(f"   Subscription ID: {subscription_id}")
-        print(f"{'─'*60}")
-        
-        logger.info(f"BillingWebhookService: Processing customer.subscription.deleted for subscription {subscription_id}")
-        
-        if not subscription_id:
-            print(f"   ⚠️  WARNING: Missing subscription_id")
-            logger.warning("BillingWebhookService: Missing subscription_id in subscription deleted event")
-            return
-        
-        print(f"   🔍 Looking up organization...")
-        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
-        
-        if not org:
-            print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
-            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
-            return
-        
-        print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
-        print(f"   📝 Setting organization to FREE plan...")
-        print(f"   ℹ️  Keeping current_period_end for UI display and analytics")
-        
-        # Set to FREE plan, keep subscription_id and current_period_end
-        # current_period_end is KEPT because:
-        # - Users can use the plan until period end
-        # - UI needs to show "Your plan will end on 2025/10/01"
-        # - Analytics needs it for period calculations
-        # - Linear/Notion also keep it
-        update_data = OrganizationUpdate(
-            plan_type=SubscriptionPlanType.FREE,
-            seat_count=1,
-            stripe_subscription_item_id=None,  # Clear item ID
+            status=status,
+            trial_end=trial_end_dt,
+            current_period_end=current_period_end_dt,
             cancel_at_period_end=False
-            # stripe_subscription_id is KEPT for analytics
-            # stripe_customer_id is KEPT for reactivation
-            # current_period_end is KEPT for UI display and analytics
         )
+        
+        # Find organization by ID (from metadata)
+        org = await self.org_repo.find_by_id(int(organization_id))
+        if not org:
+            logger.error(f"BillingWebhookService: Organization {organization_id} not found")
+            return
         
         updated_org = await self.org_repo.update(org.id, update_data)
         if updated_org:
-            print(f"   ✅ Successfully updated organization {org.id} to FREE plan")
-            print(f"      - Plan Type: {updated_org.plan_type.value}")
-            print(f"      - Seat Count: {updated_org.seat_count}")
-            print(f"      - Subscription ID (kept): {updated_org.stripe_subscription_id}")
-            print(f"      - Customer ID (kept): {updated_org.stripe_customer_id}")
-            print(f"      - Current Period End (kept): {updated_org.current_period_end}")
-            logger.info(f"BillingWebhookService: Set organization {org.id} to FREE plan after subscription deletion")
-            
-            # Auto-deactivate all non-owner members (free plan = 1 seat = owner only)
-            print(f"\n   🔄 Auto-deactivating non-owner members...")
-            deactivated_count = await self.org_service.deactivate_non_owner_members(org.id)
-            
-            if deactivated_count > 0:
-                print(f"   ✅ Deactivated {deactivated_count} non-owner member(s)")
-                logger.info(f"BillingWebhookService: Deactivated {deactivated_count} members for organization {org.id}")
-            else:
-                print(f"   ℹ️  No members to deactivate (organization only had owner)")
+            logger.info(f"BillingWebhookService: Updated organization {org.id} from checkout.session.completed")
         else:
-            print(f"   ❌ Failed to update organization")
             logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
-        
-        print(f"{'─'*60}\n")
     
     async def handle_invoice_payment_succeeded(self, invoice: dict) -> None:
         """
-        Handle invoice.payment_succeeded - renewal success
+        Handle invoice.payment_succeeded - Confirms subscription is healthy
         
-        This handler ONLY updates current_period_end.
-        Plan changes and seat changes are handled by subscription.updated.
+        This event is the ONLY authority that restores access after failure.
         
-        Correct Stripe field path:
-        invoice["lines"]["data"][0]["period"]["end"]
-        NOT invoice.period_end
+        Explicitly do NOT:
+        - Change plan_type
+        - Change seat_count
+        - Assume this is the first payment
         """
-        invoice_id = invoice.get('id', 'unknown')
-        print(f"\n{'─'*60}")
-        print(f"📝 Processing invoice.payment_succeeded (renewal)")
-        print(f"   Invoice ID: {invoice_id}")
-        print(f"{'─'*60}")
-        
-        logger.info(f"BillingWebhookService: Processing invoice.payment_succeeded for invoice {invoice_id}")
+        logger.info(f"BillingWebhookService: Processing invoice.payment_succeeded")
         
         subscription_id = invoice.get("subscription")
-        print(f"   Subscription ID: {subscription_id}")
-        
         if not subscription_id:
-            print(f"   ℹ️  Invoice has no subscription (one-time payment), skipping")
-            logger.info("BillingWebhookService: Invoice has no subscription (one-time payment)")
+            logger.info("BillingWebhookService: Invoice has no subscription (one-time payment), skipping")
             return
         
-        print(f"   🔍 Looking up organization...")
+        # Find organization
         org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
-        
         if not org:
-            print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
             logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
             return
         
-        print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
-        
         # Extract period_end from correct Stripe field path
         # Correct: invoice["lines"]["data"][0]["period"]["end"]
-        # Wrong: invoice.period_end
         period_end = None
         lines = invoice.get("lines", {}).get("data", [])
-        
         if lines and len(lines) > 0:
             period = lines[0].get("period", {})
             period_end = period.get("end")
-            print(f"   🔍 Extracted period_end from invoice.lines.data[0].period.end")
-        else:
-            print(f"   ⚠️  No lines data in invoice")
         
         if not period_end:
             # Fallback: try the wrong field (for backwards compatibility)
             period_end = invoice.get("period_end")
             if period_end:
-                print(f"   ⚠️  Using fallback invoice.period_end (not recommended)")
-                logger.warning(f"BillingWebhookService: Using fallback invoice.period_end for invoice {invoice_id}")
+                logger.warning(f"BillingWebhookService: Using fallback invoice.period_end (not recommended)")
         
+        current_period_end_dt = None
         if period_end:
-            current_period_end = datetime.fromtimestamp(period_end, tz=timezone.utc)
-            print(f"   📝 Updating period end to: {current_period_end}")
-            print(f"   ℹ️  Only updating current_period_end (plan/seat changes handled by subscription.updated)")
-            
-            update_data = OrganizationUpdate(
-                current_period_end=current_period_end
-            )
-            
-            updated_org = await self.org_repo.update(org.id, update_data)
-            if updated_org:
-                print(f"   ✅ Successfully updated period end for organization {org.id}")
-                print(f"      - New Period End: {updated_org.current_period_end}")
-                logger.info(f"BillingWebhookService: Updated period end for organization {org.id}")
-            else:
-                print(f"   ❌ Failed to update organization")
-                logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
-        else:
-            print(f"   ⚠️  No period_end found in invoice, skipping update")
-            logger.warning(f"BillingWebhookService: No period_end found in invoice {invoice_id}")
+            current_period_end_dt = datetime.fromtimestamp(period_end, tz=timezone.utc)
         
-        print(f"{'─'*60}\n")
+        # DB updates
+        update_data = OrganizationUpdate(
+            status=SubscriptionStatus.ACTIVE,
+            current_period_end=current_period_end_dt
+        )
+        
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Updated organization {org.id} status to active")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
     
     async def handle_invoice_payment_failed(self, invoice: dict) -> None:
-        """Handle invoice.payment_failed - payment failed"""
-        invoice_id = invoice.get('id', 'unknown')
-        print(f"\n{'─'*60}")
-        print(f"⚠️  Processing invoice.payment_failed")
-        print(f"   Invoice ID: {invoice_id}")
-        print(f"{'─'*60}")
+        """
+        Handle invoice.payment_failed - Signals payment problem
         
-        logger.warning(f"BillingWebhookService: Processing invoice.payment_failed for invoice {invoice_id}")
+        This event only WARNS, it does not punish.
+        
+        Explicitly do NOT:
+        - Cancel the subscription
+        - Downgrade the plan
+        - Remove access immediately
+        """
+        logger.warning(f"BillingWebhookService: Processing invoice.payment_failed")
         
         subscription_id = invoice.get("subscription")
-        customer_id = invoice.get("customer")
-        
-        print(f"   Subscription ID: {subscription_id}")
-        print(f"   Customer ID: {customer_id}")
-        
         if not subscription_id:
-            print(f"   ℹ️  Invoice has no subscription, skipping")
-            logger.info("BillingWebhookService: Invoice has no subscription")
+            logger.info("BillingWebhookService: Invoice has no subscription, skipping")
             return
         
-        print(f"   🔍 Looking up organization...")
+        # Find organization
         org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
-        if not org and customer_id:
-            print(f"   🔍 Not found by subscription_id, trying customer_id...")
-            org = await self.org_repo.find_by_stripe_customer_id(customer_id)
-        
         if not org:
-            print(f"   ⚠️  WARNING: Organization not found for subscription {subscription_id}")
             logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
             return
         
-        print(f"   ✅ Found organization: ID={org.id}, Name={org.name}")
-        print(f"   ⚠️  PAYMENT FAILED for organization {org.id}")
-        print(f"      - Subscription: {subscription_id}")
-        print(f"      - Customer: {customer_id}")
-        print(f"   💡 Note: Consider adding payment_failed_at field or status tracking")
+        # DB updates
+        update_data = OrganizationUpdate(
+            status=SubscriptionStatus.PAST_DUE
+        )
         
-        # Log payment failure - you might want to send notifications or update status
-        logger.warning(f"BillingWebhookService: Payment failed for organization {org.id}, subscription {subscription_id}")
-        # Note: You might want to add a payment_failed_at field or status field to track this
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Updated organization {org.id} status to past_due")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
+    
+    async def handle_invoice_payment_action_required(self, invoice: dict) -> None:
+        """
+        Handle invoice.payment_action_required - Payment requires user action (3DS / SCA)
         
-        print(f"{'─'*60}\n")
+        Same handling as invoice.payment_failed
+        
+        UX expectation: User must fix payment via Checkout or Portal.
+        """
+        logger.warning(f"BillingWebhookService: Processing invoice.payment_action_required")
+        
+        subscription_id = invoice.get("subscription")
+        if not subscription_id:
+            logger.info("BillingWebhookService: Invoice has no subscription, skipping")
+            return
+        
+        # Find organization
+        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
+        if not org:
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
+            return
+        
+        # DB updates
+        update_data = OrganizationUpdate(
+            status=SubscriptionStatus.PAST_DUE
+        )
+        
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Updated organization {org.id} status to past_due")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
+    
+    async def handle_subscription_updated(self, subscription: dict) -> None:
+        """
+        Handle customer.subscription.updated - Configuration changes only
+        
+        This event reflects CONFIGURATION changes, not payment health.
+        This event is often misused. Be careful.
+        
+        Explicitly do NOT:
+        - Set status = active
+        - Set status = canceled
+        - React to price changes unless you intend to support plan switching
+        """
+        logger.info(f"BillingWebhookService: Processing customer.subscription.updated")
+        
+        subscription_id = subscription.get("id")
+        if not subscription_id:
+            logger.warning("BillingWebhookService: Missing subscription_id in subscription update event")
+            return
+        
+        # Find organization
+        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
+        if not org:
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
+            return
+        
+        # Extract configuration data
+        cancel_at_period_end = subscription.get("cancel_at_period_end", False)
+        current_period_end = subscription.get("current_period_end")
+        quantity = subscription.get("items", {}).get("data", [{}])[0].get("quantity", 1)
+        
+        current_period_end_dt = None
+        if current_period_end:
+            current_period_end_dt = datetime.fromtimestamp(current_period_end, tz=timezone.utc)
+        
+        # DB updates (selective - only configuration)
+        update_data = OrganizationUpdate(
+            cancel_at_period_end=cancel_at_period_end,
+            current_period_end=current_period_end_dt,
+            seat_count=quantity
+        )
+        
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Updated organization {org.id} configuration")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
+    
+    async def handle_subscription_deleted(self, subscription: dict) -> None:
+        """
+        Handle customer.subscription.deleted - Subscription has ended
+        
+        This is the ONLY event that performs final downgrade.
+        
+        Explicitly do NOT:
+        - Wait for another event
+        - Keep paid access
+        
+        This is final.
+        """
+        logger.info(f"BillingWebhookService: Processing customer.subscription.deleted")
+        
+        subscription_id = subscription.get("id")
+        if not subscription_id:
+            logger.warning("BillingWebhookService: Missing subscription_id in subscription deleted event")
+            return
+        
+        # Find organization
+        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
+        if not org:
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
+            return
+        
+        # DB updates - final downgrade
+        update_data = OrganizationUpdate(
+            status=SubscriptionStatus.CANCELED,
+            plan_type=SubscriptionPlanType.FREE,
+            seat_count=1,
+            trial_end=None,
+            current_period_end=None,
+            cancel_at_period_end=False
+        )
+        
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Set organization {org.id} to FREE plan after subscription deletion")
+            
+            # Auto-deactivate all non-owner members
+            deactivated_count = await self.org_service.deactivate_non_owner_members(org.id)
+            if deactivated_count > 0:
+                logger.info(f"BillingWebhookService: Deactivated {deactivated_count} members for organization {org.id}")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
+    
+    async def handle_charge_dispute_created(self, dispute: dict) -> None:
+        """
+        Handle charge.dispute.created - Financial risk detected
+        
+        Notes:
+        - Access should be read-only
+        - Manual review may be required
+        """
+        logger.warning(f"BillingWebhookService: Processing charge.dispute.created")
+        
+        # Extract subscription_id via charge → invoice → subscription
+        charge_id = dispute.get("charge")
+        if not charge_id:
+            logger.warning("BillingWebhookService: No charge_id in dispute")
+            return
+        
+        try:
+            charge = stripe.Charge.retrieve(charge_id)
+            invoice_id = charge.get("invoice")
+            if not invoice_id:
+                logger.warning("BillingWebhookService: No invoice_id in charge")
+                return
+            
+            invoice = stripe.Invoice.retrieve(invoice_id)
+            subscription_id = invoice.get("subscription")
+            if not subscription_id:
+                logger.warning("BillingWebhookService: No subscription_id in invoice")
+                return
+        except Exception as e:
+            logger.error(f"BillingWebhookService: Failed to retrieve charge/invoice: {e}")
+            return
+        
+        # Find organization
+        org = await self.org_repo.find_by_stripe_subscription_id(subscription_id)
+        if not org:
+            logger.warning(f"BillingWebhookService: Organization not found for subscription {subscription_id}")
+            return
+        
+        # DB updates
+        update_data = OrganizationUpdate(
+            status=SubscriptionStatus.RESTRICTED
+        )
+        
+        updated_org = await self.org_repo.update(org.id, update_data)
+        if updated_org:
+            logger.info(f"BillingWebhookService: Set organization {org.id} status to restricted")
+        else:
+            logger.error(f"BillingWebhookService: Failed to update organization {org.id}")

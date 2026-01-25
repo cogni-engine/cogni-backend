@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import uuid
 from fastapi import HTTPException
 
-from app.infra.supabase.repositories.organizations import OrganizationRepository
-from app.models.organization import Organization, OrganizationUpdate
+from app.features.billing.repositories.organizations import OrganizationRepository
+from app.features.billing.models.organization import Organization, OrganizationUpdate
 
 logger = logging.getLogger(__name__)
 

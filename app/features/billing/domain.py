@@ -8,3 +8,12 @@ class SubscriptionPlanType(str, Enum):
     FREE = "free"
     PRO = "pro"
     BUSINESS = "business"
+
+
+class SubscriptionStatus(str, Enum):
+    """Subscription status enum"""
+    TRIALING = "trialing"
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    CANCELED = "canceled"
+    RESTRICTED = "restricted"
