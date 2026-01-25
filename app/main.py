@@ -1,4 +1,5 @@
 import logging
+import os
 
 # Log configuration (before other imports)
 # ruff: noqa: E402
@@ -19,10 +20,43 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Configure CORS with specific origins
+# When allow_credentials=True, we cannot use allow_origins=["*"]
+# We need to specify exact origins
+def get_allowed_origins() -> list[str]:
+    """Get list of allowed CORS origins from environment variables"""
+    origins = []
+    
+    # Add CLIENT_URL if set
+    client_url = os.getenv("CLIENT_URL", "http://localhost:3000")
+    if client_url:
+        origins.append(client_url)
+    
+    # Add additional origins from ALLOWED_ORIGINS env var (comma-separated)
+    allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+    if allowed_origins_env:
+        origins.extend([origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()])
+    
+    # Always include localhost for development
+    if "http://localhost:3000" not in origins:
+        origins.append("http://localhost:3000")
+    if "http://127.0.0.1:3000" not in origins:
+        origins.append("http://127.0.0.1:3000")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_origins = []
+    for origin in origins:
+        if origin not in seen:
+            seen.add(origin)
+            unique_origins.append(origin)
+    
+    logging.info(f"CORS allowed origins: {unique_origins}")
+    return unique_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
