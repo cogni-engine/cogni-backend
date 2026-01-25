@@ -30,7 +30,16 @@ class TaskResult(BaseModel):
     result_text: str
     executed_at: datetime
     created_at: datetime
-    
+
+    class Config:
+        from_attributes = True
+
+
+class NoteInfo(BaseModel):
+    """Note information for notifications"""
+    id: int
+    title: Optional[str] = None
+
     class Config:
         from_attributes = True
 
@@ -81,7 +90,8 @@ class AINotification(AINotificationBase):
     created_at: datetime
     updated_at: datetime
     task_result: Optional[TaskResult] = None  # Included if notification has a task_result_id
-    
+    note: Optional[NoteInfo] = None  # Included if notification's task has a source_note_id
+
     class Config:
         from_attributes = True
 

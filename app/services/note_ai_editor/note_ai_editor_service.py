@@ -59,19 +59,19 @@ async def get_ai_suggestions(
     try:
         logger.info("Getting AI suggestions for note using anchor-based approach")
         logger.info(f"User instruction: {user_instruction}")
-        
+
         # Step 1: Create ID mapper from annotated markdown
         id_mapper = create_id_mapper_from_annotated_markdown(annotated_note_content)
-        
+
         # Step 2: Generate AI-friendly markdown with simple IDs (1, 2, 3...)
         ai_friendly_markdown = generate_ai_friendly_markdown(
             annotated_note_content,
             id_mapper
         )
-        
+
         logger.info(f"Generated AI-friendly markdown (length: {len(ai_friendly_markdown)} chars)")
         logger.info(f"AI-friendly markdown:\n{ai_friendly_markdown}")
-        
+
         # Step 3: Send to AI with anchor-based prompt
         chain = anchor_suggestion_prompt_template | llm
         result = await chain.ainvoke({
@@ -79,18 +79,18 @@ async def get_ai_suggestions(
             "user_instruction": user_instruction,
             "file_context": file_context,
         })
-        
+
         ai_output = str(result.content).strip()
         logger.info(f"AI generated anchored output (length: {len(ai_output)} chars)")
         logger.info(f"Full AI output:\n{ai_output}")
-        
+
         # Step 4: Parse anchored output to suggestions
         suggestions = parse_anchored_output_with_validation(
             ai_output=ai_output,
             id_mapper=id_mapper,
             original_annotated_markdown=annotated_note_content
         )
-        
+
         logger.info(f"Generated {len(suggestions)} AI suggestions from anchored output")
         return suggestions
         

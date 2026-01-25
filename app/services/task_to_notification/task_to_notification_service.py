@@ -24,13 +24,18 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
     """
     特定のTaskからAIで通知を生成してデータベースに保存する
     既存の同じtask_idから生成された通知は削除される
-    
+
     Args:
         task: タスクオブジェクト
-    
+
     Returns:
         保存された通知のリスト
     """
+    # Skip AI tasks - they have their own completion notifications
+    if task.is_ai_task:
+        logger.info(f"Skipping AI task {task.id}: notifications handled by completion service")
+        return []
+
     # 既存の同じtask_idから生成された通知を削除
     notification_repo = AINotificationRepository(supabase)
     deleted_count = await notification_repo.delete_by_task(task.id)
@@ -102,16 +107,23 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
 async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AINotification]:
     """
     複数のTaskからAIで通知を一括生成してデータベースに保存する
-    
+
     Args:
         tasks: タスクのリスト（同じsource_note_idのタスク群）
-    
+
     Returns:
         保存された通知のリスト
     """
     if not tasks:
         return []
-    
+
+    # Filter out AI tasks - they have their own completion notifications
+    human_tasks = [t for t in tasks if not t.is_ai_task]
+    if not human_tasks:
+        logger.info("No human tasks to generate notifications for (all tasks are AI tasks)")
+        return []
+    tasks = human_tasks  # Use filtered list
+
     # 既存の通知を一括削除
     notification_repo = AINotificationRepository(supabase)
     task_ids = [task.id for task in tasks]

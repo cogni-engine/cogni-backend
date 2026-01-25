@@ -1,11 +1,12 @@
 """SQLAlchemy repository for AI Notifications"""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, func, select, cast, String, update, text
+from sqlalchemy.orm import selectinload
 
 # SQLAlchemy ORM models
 from app.db.models.ai_notification import (
@@ -20,7 +21,7 @@ from app.db.models.workspace_member import WorkspaceMember as WorkspaceMemberORM
 from app.db.models.user_profile import UserProfile as UserProfileORM
 
 # Pydantic domain models (feature-local)
-from app.features.ai_notifications.domain import AINotification
+from app.features.ai_notifications.domain import AINotification, NoteInfo as DomainNoteInfo
 from app.features.ai_notifications.schemas import ReactedAINotification, NoteInfo, UserInfo
 
 logger = logging.getLogger(__name__)
@@ -39,87 +40,132 @@ class AINotificationRepository:
         self.db = db
     
     async def get_past_due_notifications_for_user(
-        self, 
+        self,
         user_id: UUID | str,
         current_time: datetime | None = None
     ) -> List[AINotification]:
         """
         Get all past due notifications for a specific user that need action.
-        
+
         Returns notifications where:
         - due_date is in the past
         - status is not "resolved"
         - reaction_status is "None" (not completed, postponed, or dismissed)
-        
+
         Args:
             user_id: The UUID of the user (can be UUID object or string)
             current_time: The reference time to compare against (defaults to now)
-            
+
         Returns:
-            List of past AINotification domain models (Pydantic), 
+            List of past AINotification domain models (Pydantic),
             ordered by due_date (oldest first)
         """
         if current_time is None:
-            current_time = datetime.now()
-        
+            current_time = datetime.now(timezone.utc)
+
         # Convert string UUID to UUID object if needed
         if isinstance(user_id, str):
             user_id = UUID(user_id)
-        
-        # Build query for past notifications with intelligent deduplication:
-        # 1. Include ALL notifications that have a task_result_id
-        # 2. For notifications WITHOUT task_result_id, only include the most recent per task
-        # 3. Exclude resolved notifications or notifications with user reactions
-        
-        # Subquery: Get the max ID (most recent) for each task where task_result_id is NULL
-        subquery = (
-            select(
-                AINotificationORM.task_id,
-                func.max(AINotificationORM.id).label('max_id')
-            )
-            .where(
-                and_(
-                    AINotificationORM.user_id == user_id,
-                    AINotificationORM.due_date < current_time,
-                    AINotificationORM.task_result_id.is_(None),
-                    cast(AINotificationORM.status, String) != "resolved",
-                    cast(AINotificationORM.reaction_status, String) == "None"
-                )
-            )
-            .group_by(AINotificationORM.task_id)
-            .subquery()
-        )
-        
-        # Main query with conditions
+
+        # Fetch all past due notifications (no deduplication in SQL)
         stmt = (
             select(AINotificationORM)
-            .outerjoin(TaskResultORM, AINotificationORM.task_result_id == TaskResultORM.id)
             .where(
                 and_(
                     AINotificationORM.user_id == user_id,
                     AINotificationORM.due_date < current_time,
                     cast(AINotificationORM.status, String) != "resolved",
-                    cast(AINotificationORM.reaction_status, String) == "None",
-                    or_(
-                        AINotificationORM.task_result_id.isnot(None),
-                        and_(
-                            AINotificationORM.task_id == subquery.c.task_id,
-                            AINotificationORM.id == subquery.c.max_id
-                        )
-                    )
+                    cast(AINotificationORM.reaction_status, String) == "None"
                 )
             )
             .order_by(AINotificationORM.due_date.asc())
         )
         result = await self.db.execute(stmt)
-        orm_notifications = result.scalars().all()
-        
-        # Convert to domain models
-        domain_notifications = [
-            self._to_domain_model(orm_notification)
-            for orm_notification in orm_notifications
-        ]
-        
+        all_notifications = result.scalars().all()
+
+        # Deduplicate in Python:
+        # 1. Include ALL notifications that have a task_result_id
+        # 2. For notifications WITHOUT task_result_id, only include the most recent per task
+        notifications_with_result = []
+        notifications_without_result_by_task: dict[int, AINotificationORM] = {}
+
+        for n in all_notifications:
+            if n.task_result_id is not None:
+                notifications_with_result.append(n)
+            else:
+                # Keep only the one with highest ID (most recent) per task
+                existing = notifications_without_result_by_task.get(n.task_id)
+                if existing is None or n.id > existing.id:
+                    notifications_without_result_by_task[n.task_id] = n
+
+        # Combine and sort by due_date
+        notifications = notifications_with_result + list(notifications_without_result_by_task.values())
+        notifications.sort(key=lambda x: x.due_date)
+
+        if not notifications:
+            return []
+
+        # Collect IDs for batch fetching
+        task_ids = set()
+        task_result_ids = set()
+        for orm_notification in notifications:
+            task_ids.add(orm_notification.task_id)
+            if orm_notification.task_result_id is not None:
+                task_result_ids.add(orm_notification.task_result_id)
+
+        # Batch fetch tasks
+        tasks_dict = {}
+        if task_ids:
+            stmt_tasks = select(TaskORM).where(TaskORM.id.in_(task_ids))
+            result_tasks = await self.db.execute(stmt_tasks)
+            tasks = result_tasks.scalars().all()
+            tasks_dict = {t.id: t for t in tasks}
+
+        # Collect note_ids from tasks
+        note_ids = {
+            t.source_note_id for t in tasks_dict.values()
+            if t.source_note_id is not None
+        }
+
+        # Batch fetch notes - OPTIMIZED: Only select id and title
+        notes_dict = {}
+        if note_ids:
+            stmt_notes = select(NoteORM.id, NoteORM.title).where(NoteORM.id.in_(note_ids))
+            result_notes = await self.db.execute(stmt_notes)
+            notes_rows = result_notes.all()
+            notes_dict = {row.id: row for row in notes_rows}
+
+        # Batch fetch task results
+        task_results_dict = {}
+        if task_result_ids:
+            stmt_task_results = select(TaskResultORM).where(TaskResultORM.id.in_(task_result_ids))
+            result_task_results = await self.db.execute(stmt_task_results)
+            task_results = result_task_results.scalars().all()
+            task_results_dict = {tr.id: tr for tr in task_results}
+
+        # Convert to domain models with note info
+        domain_notifications = []
+        for orm_notification in notifications:
+            # Get task for this notification
+            task = tasks_dict.get(orm_notification.task_id)
+
+            # Get note info if task has source_note_id
+            note_info = None
+            if task and task.source_note_id:
+                note_row = notes_dict.get(task.source_note_id)
+                if note_row:
+                    note_info = DomainNoteInfo(
+                        id=int(note_row.id),
+                        title=note_row.title if note_row.title else None
+                    )
+
+            # Attach task_result to orm_notification for domain model conversion
+            if orm_notification.task_result_id:
+                orm_notification.task_result = task_results_dict.get(orm_notification.task_result_id)
+
+            domain_notification = self._to_domain_model_with_note(orm_notification, note_info)
+            domain_notifications.append(domain_notification)
+
         return domain_notifications
     
     async def get_notification_by_id(
@@ -142,6 +188,7 @@ class AINotificationRepository:
         
         stmt = (
             select(AINotificationORM)
+            .options(selectinload(AINotificationORM.task_result))
             .where(
                 and_(
                     AINotificationORM.id == notification_id,
@@ -151,10 +198,10 @@ class AINotificationRepository:
         )
         result = await self.db.execute(stmt)
         orm_notification = result.scalar_one_or_none()
-        
+
         if not orm_notification:
             return None
-        
+
         return self._to_domain_model(orm_notification)
     
     async def complete_notification_and_resolve_previous(
@@ -163,25 +210,28 @@ class AINotificationRepository:
         user_id: UUID | str
     ) -> tuple[int, List[int]]:
         """
-        Complete a notification and resolve all previous notifications from the same task.
-        
+        Complete a notification and optionally resolve previous notifications from the same task.
+
         This method:
         1. Sets the target notification's reaction_status to "completed"
-        2. Sets all notifications from the same task with due_date <= target's due_date status to "resolved"
-        
+        2. If the notification does NOT have a task_result_id:
+           - Also resolves all previous notifications from the same task with due_date <= target's due_date
+        3. If the notification HAS a task_result_id:
+           - Only resolves the target notification (previous ones remain unresolved)
+
         Args:
             notification_id: The ID of the notification being completed
             user_id: The UUID of the user (for authorization)
-            
+
         Returns:
             Tuple of (completed_notification_id, list of resolved_notification_ids)
-            
+
         Raises:
             ValueError: If notification not found or doesn't belong to user
         """
         if isinstance(user_id, str):
             user_id = UUID(user_id)
-        
+
         # Get the target notification (with row-level lock for consistency)
         stmt = (
             select(AINotificationORM)
@@ -195,55 +245,63 @@ class AINotificationRepository:
         )
         result = await self.db.execute(stmt)
         target_notification = result.scalar_one_or_none()
-        
+
         if not target_notification:
             raise ValueError(f"Notification {notification_id} not found or access denied")
-        
-        # Extract task_id and due_date for the query
+
+        # Extract task_id, due_date, and task_result_id for the query
         task_id = target_notification.task_id
         target_due_date = target_notification.due_date
-        
-        # Update the target notification's reaction_status to "completed"
+        has_task_result = target_notification.task_result_id is not None
+
+        # Update the target notification's reaction_status to "completed" and status to "resolved"
         # Use update() with cast to handle PostgreSQL enum type
         stmt_update_target = (
             update(AINotificationORM)
             .where(AINotificationORM.id == notification_id)
-            .values(reaction_status=text(f"'{ReactionStatus.COMPLETED.value}'::ai_notification_reaction_status"))
+            .values(
+                reaction_status=text(f"'{ReactionStatus.COMPLETED.value}'::ai_notification_reaction_status"),
+                status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status")
+            )
         )
         await self.db.execute(stmt_update_target)
-        
-        # Find all notifications from the same task with due_date <= target's due_date
-        # excluding the target itself (it's already set to completed)
-        stmt_previous = (
-            select(AINotificationORM)
-            .where(
-                and_(
-                    AINotificationORM.task_id == task_id,
-                    AINotificationORM.user_id == user_id,
-                    AINotificationORM.due_date <= target_due_date,
-                    AINotificationORM.id != notification_id,
-                    # Only update if not already resolved
-                    cast(AINotificationORM.status, String) != "resolved"
+
+        resolved_ids: List[int] = []
+
+        # Only resolve previous notifications if the target does NOT have a task_result
+        if not has_task_result:
+            # Find all notifications from the same task with due_date <= target's due_date
+            # excluding the target itself (it's already set to completed)
+            stmt_previous = (
+                select(AINotificationORM)
+                .where(
+                    and_(
+                        AINotificationORM.task_id == task_id,
+                        AINotificationORM.user_id == user_id,
+                        AINotificationORM.due_date <= target_due_date,
+                        AINotificationORM.id != notification_id,
+                        # Only update if not already resolved
+                        cast(AINotificationORM.status, String) != "resolved"
+                    )
                 )
             )
-        )
-        result_previous = await self.db.execute(stmt_previous)
-        previous_notifications = result_previous.scalars().all()
-        
-        # Update all previous notifications' status to "resolved"
-        # Use update() with cast to handle PostgreSQL enum type
-        resolved_ids: List[int] = [notification.id for notification in previous_notifications]  # type: ignore[list-item]
-        if resolved_ids:
-            stmt_update = (
-                update(AINotificationORM)
-                .where(AINotificationORM.id.in_(resolved_ids))
-                .values(status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status"))
-            )
-            await self.db.execute(stmt_update)
-        
+            result_previous = await self.db.execute(stmt_previous)
+            previous_notifications = result_previous.scalars().all()
+
+            # Update all previous notifications' status to "resolved"
+            # Use update() with cast to handle PostgreSQL enum type
+            resolved_ids = [notification.id for notification in previous_notifications]  # type: ignore[list-item]
+            if resolved_ids:
+                stmt_update = (
+                    update(AINotificationORM)
+                    .where(AINotificationORM.id.in_(resolved_ids))
+                    .values(status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status"))
+                )
+                await self.db.execute(stmt_update)
+
         # Commit the transaction (I/O happens here)
         await self.db.commit()
-        
+
         return (notification_id, resolved_ids)
     
     async def postpone_notification_and_resolve_previous(
@@ -295,13 +353,14 @@ class AINotificationRepository:
         task_id = target_notification.task_id
         target_due_date = target_notification.due_date
         
-        # Update the target notification's reaction_status to "postponed" and store reaction text
+        # Update the target notification's reaction_status to "postponed", status to "resolved", and store reaction text
         # Use update() with cast to handle PostgreSQL enum type
         stmt_update_target = (
             update(AINotificationORM)
             .where(AINotificationORM.id == notification_id)
             .values(
                 reaction_status=text(f"'{ReactionStatus.POSTPONED.value}'::ai_notification_reaction_status"),
+                status=text(f"'{NotificationStatus.RESOLVED.value}'::notification_status"),
                 reaction_text=reaction_text
             )
         )
@@ -624,11 +683,32 @@ class AINotificationRepository:
     def _to_domain_model(self, orm_notification: AINotificationORM) -> AINotification:
         """
         Convert SQLAlchemy ORM model to Pydantic domain model.
-        
+
         Args:
             orm_notification: SQLAlchemy AINotification ORM object
-            
+
         Returns:
             Pydantic AINotification domain model
         """
         return AINotification.model_validate(orm_notification)
+
+    def _to_domain_model_with_note(
+        self,
+        orm_notification: AINotificationORM,
+        note_info: Optional[DomainNoteInfo] = None
+    ) -> AINotification:
+        """
+        Convert SQLAlchemy ORM model to Pydantic domain model with note info.
+
+        Args:
+            orm_notification: SQLAlchemy AINotification ORM object
+            note_info: Optional NoteInfo domain model
+
+        Returns:
+            Pydantic AINotification domain model with note field populated
+        """
+        # First convert to domain model
+        domain_notification = AINotification.model_validate(orm_notification)
+        # Then add note info
+        domain_notification.note = note_info
+        return domain_notification

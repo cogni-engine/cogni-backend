@@ -5,78 +5,70 @@ from langchain_core.prompts import ChatPromptTemplate
 prompt_template = ChatPromptTemplate.from_messages([
     (
         "system",
-        "あなたはタスク情報から適切な通知を生成する専門家です。"
-        "ユーザーに送る通知は、行動を促し、具体的で親しみやすい内容にしてください。"
-        "すべての内容は必ず日本語で記述してください。"
+        "You generate thoughtful notifications from tasks. "
+        "Read the task carefully and think about what the user actually wants to achieve. "
+        "Based on that understanding, decide what kind of notification would genuinely help them. "
+        "Match the task's language in all outputs."
     ),
     (
         "user",
-        """以下のタスク情報を分析して、ユーザーに送る通知を生成してください。
+        """Generate notifications for this task.
 
-現在の日時: {current_datetime}
+Current datetime: {current_datetime}
 
-タスク情報:
-タイトル: {task_title}
-説明: {task_description}
-期限: {task_deadline}
-ステータス: {task_status}
-進捗: {task_progress}%
+Task:
+- Title: {task_title}
+- Description: {task_description}
+- Deadline: {task_deadline}
+- Status: {task_status}
+- Progress: {task_progress}%
 
-要求:
-- 通知は必ず日本語で記述してください
-- 1つのノートにつき3〜5件の通知を生成してください
-- 最初の通知は現在時刻の約2分後~1時間後に設定し、ノート全体に通じる汎用的かつ着手しやすい第一歩を提案してください
-- 最終の通知は締切時刻（deadline）が存在する場合はその時刻ちょうどに設定し、完了確認またはフォローアップを行ってください
-- 残りの通知は上記2つの間にほぼ等間隔で配置し、進捗確認や計画の見直し、モチベーションを高める内容を含めてください
-- 締切までの残り時間が1時間未満でない限り、通知同士の間隔は最低でも1時間以上空けてください。締切まで期間が長い場合は、1日後・3日後・1週間後など十分な間隔を確保してください
-- 締切が設定されていない場合は、現在時刻の2分後、4時間後・8時間後・1日後・2日後・5日後といった、最低でも4時間以上の間隔を空けたスケジュールを基準に、3〜5件の通知を配置してください
-- 勿論、最後の通知のタイトルは全体を包括した内容が完了しているか聞いてください
-- due_dateは時系列で昇順になるように設定し、全ての通知を締切より前（または締切がない場合は適切な将来の時刻）に設定してください
-- 各通知のタイトルは、タスク名を含めた親しみやすい問いかけや呼びかけ形式にしてください（例：「○○の進捗はどうですか」「○○は終わりましたか」「○○に一緒に取り組みましょう」など、通知のタイトルとして適切な形式で記述してください）
-- 各通知のbody（ユーザーに表示される本文）は100-150文字程度で、すぐに実行できる具体的なアクションや問いかけを含め、ユーザーが次に何をすればよいかが明確になるようにしてください。手短で分かりやすく記述してください。
-- 各通知のai_context（ユーザーに表示されない内部情報）には、通知生成の判断根拠、タスクの詳細分析、システム用のメタデータなどを記述してください。これはユーザーには表示されません。due_dateの情報は含めないでください。
-- 期限超過時の「事後確認」通知が必要な場合は、締切直後に続けて配置し、リカバリや次のアクションを促してください
-- 通知が重複したり内容が似通いすぎないよう注意し、全体として計画的な進行を支援する構成にしてください
+Guidelines:
+- Generate 1-3 notifications based on task complexity
+- First notification: 5 min to 2 hours from now
+- Spacing: 2-4+ hours between notifications
+- Final: before deadline if exists
 
-通知が必要ない場合（例: タスクが既に完了している場合）は空の配列を返してください。"""
+For each notification, think first:
+1. ai_context: What is the user trying to achieve? What would actually help them?
+2. title: Based on your analysis (<15 chars)
+3. body: Based on your analysis - what the user needs (50-80 chars)
+
+Use task details to make notifications specific and relevant.
+Return empty array if no notifications needed."""
     )
 ])
 
 
-# バッチ処理用プロンプト（複数タスクをまとめて処理）
 batch_prompt_template = ChatPromptTemplate.from_messages([
     (
         "system",
-        "あなたは複数のタスク情報から適切な通知を生成する専門家です。"
-        "複数のタスクが同じノートから生成されている場合、関連性を考慮して通知を統合してください。"
-        "すべての内容は必ず日本語で記述してください。"
+        "You generate thoughtful notifications from multiple tasks. "
+        "Read the tasks carefully and think about what the user actually wants to achieve. "
+        "Based on that understanding, decide what kind of notification would genuinely help them. "
+        "Consolidate related tasks. Match the tasks' language in all outputs."
     ),
     (
         "user",
-        """以下の複数タスク情報を分析して、ユーザーに送る通知を生成してください。
+        """Generate notifications for these tasks.
 
-現在の日時: {current_datetime}
+Current datetime: {current_datetime}
 
-タスクリスト:
+Tasks:
 {tasks_info}
 
-要求:
-- 通知は必ず日本語で記述してください
-- タスクリスト全体に対して3〜5件の通知を生成し、必要に応じて関連タスクを1つの通知にまとめてください
-- 最初の通知は現在時刻の約2分後~1時間後に設定し、複数タスクに共通して取り掛かれる最初の一歩を提案してください
-- 最終の通知は対象タスク群の最も早い締切ちょうどに設定し、完了確認やフォローアップを促してください
-- 残りの通知は上記2つの間にほぼ等間隔で配置し、進捗レビュー、計画調整、モチベーション向上など異なる観点を扱ってください
-- 締切までの残り時間が1時間未満でない限り、通知同士の間隔は最低でも1時間以上空けてください。締切が遠い場合は1日後・3日後・1週間後など適切な間隔を活用してください
-- 締切がない、あるいはタスクによって締切がばらつく場合は、代表となる期限やタスクの性質を踏まえて、現在時刻、4時間後・8時間後・1日後・2日後・5日後といった、最低でも4時間以上の間隔を空けたスケジュールを基準に3〜5件の通知を配置してください
-- 勿論、最後の通知のタイトルは全体を包括した内容が完了しているか聞いてください
-- due_dateは昇順になるように設定し、各通知が適切な順序で実行されるようにしてください
-- 各通知のタイトルは、タスク名を含めた親しみやすい問いかけや呼びかけ形式にしてください（例：「○○の進捗はどうですか」「○○は終わりましたか」「○○に一緒に取り組みましょう」など、通知のタイトルとして適切な形式で記述してください）。複数タスクを扱う場合は、主要なタスク名やグループ名を含めてください
-- 各通知のbody（ユーザーに表示される本文）は100-150文字程度で、すぐに実行できる具体的なアクションや確認事項を明確にし、複数タスクを扱う場合は関係するタスク名やグループ名を明示してください。手短で分かりやすく記述してください。
-- 各通知のai_context（ユーザーに表示されない内部情報）には、通知生成の判断根拠、タスクの詳細分析、システム用のメタデータなどを記述してください。これはユーザーには表示されません。due_dateの情報は含めないでください。
-- 締切超過が想定される場合は締切直後のフォローアップ通知を追加し、リカバリ策や次のアクションを提示してください
-- 通知内容や timing が重複しないように工夫し、全体として計画的な進行を支援してください
+Guidelines:
+- Generate 1-3 notifications total (consolidate related tasks)
+- First notification: 5 min to 2 hours from now
+- Spacing: 2-4+ hours between notifications
+- Final: before earliest deadline
 
-通知が必要ない場合は空の配列を返してください。"""
+For each notification, think first:
+1. ai_context: What is the user trying to achieve? How do tasks relate? What would help?
+2. title: Based on your analysis (<15 chars)
+3. body: Based on your analysis - what the user needs (50-80 chars)
+
+Use task details to make notifications specific and relevant.
+Return empty array if no notifications needed."""
     )
 ])
-

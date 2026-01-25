@@ -5,28 +5,27 @@ from langchain_core.prompts import ChatPromptTemplate
 completion_notification_prompt_template = ChatPromptTemplate.from_messages([
     (
         "system",
-        "あなたはAIタスクの実行完了をユーザーに通知する専門家です。"
-        "タスクが完了したことを親しみやすく、簡潔に伝える通知を生成してください。"
-        "すべての内容は必ず日本語で記述してください。"
+        "You generate completion notifications for AI task results. "
+        "Create friendly, concise notifications that convey accomplishment. "
+        "Match the language of the task and result content."
     ),
     (
         "user",
-        """以下のAIタスクが実行されました。完了通知を1つ生成してください。
+        """An AI task has been completed. Generate one notification.
 
-タスクタイトル: {task_title}
+Task title: {task_title}
 
-実行結果の概要: {result_title}
+Result summary: {result_title}
 
-実行結果の詳細:
+Result details:
 {result_text}
 
-要求:
-- 通知は必ず日本語で記述してください
-- 通知は1つだけ生成してください
-- タイトルは「○○を終わらせました」のような完了を伝える形式にしてください
-- 本文（body）は100-150文字程度で、完了した内容の概要や次のアクションを簡潔に記述してください
-- ai_contextには、通知生成の判断根拠やタスクの詳細分析を記述してください（ユーザーには表示されません）
-- 親しみやすく、達成感を感じられる内容にしてください"""
+Requirements:
+- Match the language of the content above
+- Title: completion format (e.g., "Finished [task]" or "○○を完了しました")
+- Body: 50-100 chars, summarize what was done and suggest next action
+- ai_context: your reasoning (not shown to user)
+- Friendly tone that conveys accomplishment"""
     )
 ])
 
