@@ -86,7 +86,7 @@ async def make_engine_decision(current_user_id: str, messages: Sequence[MessageL
             f"Cogni Engine context: {len(tasks)} relevant tasks "
             f"(from {len(all_tasks)} total, filtered by: updated_in_1week OR deadline_within_3days)"
         )
-        
+
         # Get recent chat history (last 6 messages for better context)
         # Convert to LLM format
         chat_history = _convert_messages_to_dict(messages[-6:])
