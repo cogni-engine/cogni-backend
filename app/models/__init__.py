@@ -6,7 +6,9 @@ from .thread import Thread, ThreadCreate, ThreadUpdate
 from .ai_message import AIMessage, AIMessageCreate, AIMessageUpdate, MessageFile, MessageRole
 from .notification import AINotification, AINotificationCreate, AINotificationUpdate, NotificationAnalysisRequest, NotificationAnalysisResponse, NotificationStatus, NotificationCreateRequest, NotificationUpdateStatusRequest
 from .workspace import Workspace, WorkspaceCreate, WorkspaceUpdate, WorkspaceMember, WorkspaceMemberCreate, WorkspaceMemberUpdate
-from .organization import Organization, OrganizationCreate, OrganizationUpdate, SubscriptionPlanType
+# Organization models moved to app.features.billing.models
+# Import from there: from app.features.billing.models import Organization, OrganizationCreate, OrganizationUpdate
+# SubscriptionPlanType is in app.features.billing.domain
 from .user import UserProfile, UserProfileCreate, UserProfileUpdate
 from .chat import ChatRequest, ChatResponse, ChatMessage
 from .recurrence import (
@@ -27,7 +29,6 @@ __all__ = [
     'NotificationStatus', 'NotificationCreateRequest', 'NotificationUpdateStatusRequest',
     'Workspace', 'WorkspaceCreate', 'WorkspaceUpdate',
     'WorkspaceMember', 'WorkspaceMemberCreate', 'WorkspaceMemberUpdate',
-    'Organization', 'OrganizationCreate', 'OrganizationUpdate', 'SubscriptionPlanType',
     'UserProfile', 'UserProfileCreate', 'UserProfileUpdate',
     'ChatRequest', 'ChatResponse', 'ChatMessage',
     'TaskUpdateRequest', 'TaskUpdateResponse',

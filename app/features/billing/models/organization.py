@@ -1,15 +1,10 @@
 """Organization domain model"""
+from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
-from enum import Enum
 
-
-class SubscriptionPlanType(str, Enum):
-    """Subscription plan type enum"""
-    FREE = "free"
-    PRO = "pro"
-    BUSINESS = "business"
+from app.features.billing.domain import SubscriptionPlanType
 
 
 class OrganizationBase(BaseModel):
@@ -21,6 +16,8 @@ class OrganizationBase(BaseModel):
     seat_count: int = 1
     active_member_count: int = 0
     plan_type: SubscriptionPlanType = SubscriptionPlanType.PRO
+    status: Optional["SubscriptionStatus"] = None
+    trial_end: Optional[datetime] = None
     current_period_end: Optional[datetime] = None
     cancel_at_period_end: Optional[bool] = None
 
@@ -39,6 +36,8 @@ class OrganizationUpdate(BaseModel):
     seat_count: Optional[int] = None
     active_member_count: Optional[int] = None
     plan_type: Optional[SubscriptionPlanType] = None
+    status: Optional["SubscriptionStatus"] = None
+    trial_end: Optional[datetime] = None
     current_period_end: Optional[datetime] = None
     cancel_at_period_end: Optional[bool] = None
 
@@ -53,5 +52,6 @@ class Organization(OrganizationBase):
         from_attributes = True
 
 
-
-
+# Import SubscriptionStatus after class definitions to avoid circular import
+# This is safe because we use string annotations (from __future__ import annotations)
+from app.features.billing.domain import SubscriptionStatus  # noqa: E402

@@ -7,7 +7,7 @@ from .notifications import AINotificationRepository
 from .tasks import TaskRepository
 from .threads import ThreadRepository
 from .workspaces import WorkspaceMemberRepository, WorkspaceRepository
-from .organizations import OrganizationRepository
+# OrganizationRepository moved to app.features.billing.repositories
 
 
 class RepositoryFactory:
@@ -84,6 +84,5 @@ __all__ = [
     'AINotificationRepository',
     'WorkspaceRepository',
     'WorkspaceMemberRepository',
-    'OrganizationRepository',
 ]
 

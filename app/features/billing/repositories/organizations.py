@@ -3,13 +3,13 @@ from typing import Optional
 
 from supabase import Client  # type: ignore
 
-from app.models.organization import (
+from app.features.billing.models.organization import (
     Organization,
     OrganizationCreate,
     OrganizationUpdate,
 )
 
-from .base import BaseRepository
+from app.infra.supabase.repositories.base import BaseRepository
 
 
 class OrganizationRepository(BaseRepository[Organization, OrganizationCreate, OrganizationUpdate]):
@@ -27,7 +27,3 @@ class OrganizationRepository(BaseRepository[Organization, OrganizationCreate, Or
         """Find organization by Stripe subscription ID"""
         results = await self.find_by_filters({"stripe_subscription_id": stripe_subscription_id}, limit=1)
         return results[0] if results else None
-
-
-
-

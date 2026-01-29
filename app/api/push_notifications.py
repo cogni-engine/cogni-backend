@@ -22,17 +22,6 @@ router = APIRouter(prefix="/api/push-notifications", tags=["push-notifications"]
 # Initialize push notification service
 push_service = PushNotificationService(supabase)
 
-
-@router.get("/health")
-async def health_check():
-    """Health check for push notification service"""
-    return {
-        "status": "healthy",
-        "service": "push-notifications",
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-
 @router.post("/send", response_model=SendPushNotificationResponse)
 async def send_push_notification(request: SupabaseWebhookPayload):
     """

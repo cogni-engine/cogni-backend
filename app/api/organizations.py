@@ -8,8 +8,8 @@ from enum import Enum
 
 from app.config import supabase
 from app.auth import get_current_user_id
-from app.infra.supabase.repositories.organizations import OrganizationRepository
-from app.services.organizations import OrganizationService
+from app.features.billing.repositories.organizations import OrganizationRepository
+from app.features.billing.services import OrganizationService
 
 logger = logging.getLogger(__name__)
 
