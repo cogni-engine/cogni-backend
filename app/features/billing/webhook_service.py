@@ -358,6 +358,11 @@ class BillingWebhookService:
         item = items[0]
         quantity = item.get("quantity", 1)
         
+        # Extract price_id to detect plan changes
+        price = item.get("price", {})
+        price_id = price.get("id")
+        new_plan_type = self._get_plan_type_from_price_id(price_id)
+        
         # Extract current_period_end from subscription item (new API: 2025-11-17.clover)
         current_period_end = item.get("current_period_end")
         
@@ -372,8 +377,15 @@ class BillingWebhookService:
         if cancel_at and current_period_end and cancel_at == current_period_end:
             cancel_at_period_end = True
         
+        # Check if plan changed from BUSINESS to PRO
+        old_plan_type = org.plan_type
+        plan_changed = old_plan_type != new_plan_type
+        downgraded_to_pro = (old_plan_type == SubscriptionPlanType.BUSINESS and 
+                             new_plan_type == SubscriptionPlanType.PRO)
+        
         # DB updates (selective - only configuration)
         update_data = OrganizationUpdate(
+            plan_type=new_plan_type,  # Include plan_type in updates
             cancel_at_period_end=cancel_at_period_end,
             current_period_end=current_period_end_dt,
             seat_count=quantity
@@ -381,7 +393,17 @@ class BillingWebhookService:
         
         updated_org = await self.org_repo.update(org.id, update_data)
         if updated_org:
-            logger.info(f"BillingWebhookService: Updated organization {org.id} configuration - seats={quantity}, cancel_at_period_end={cancel_at_period_end}")
+            if plan_changed:
+                logger.info(f"BillingWebhookService: Plan changed for organization {org.id}: {old_plan_type.value} → {new_plan_type.value}, seats={quantity}, cancel_at_period_end={cancel_at_period_end}")
+            else:
+                logger.info(f"BillingWebhookService: Updated organization {org.id} configuration - seats={quantity}, cancel_at_period_end={cancel_at_period_end}")
+            
+            # Handle downgrade from BUSINESS to PRO - deactivate excess members
+            if downgraded_to_pro:
+                logger.info(f"BillingWebhookService: Handling BUSINESS → PRO downgrade for organization {org.id}")
+                deactivated_count = await self.org_service.deactivate_non_owner_members(org.id)
+                if deactivated_count > 0:
+                    logger.info(f"BillingWebhookService: Deactivated {deactivated_count} members for organization {org.id} after downgrade to PRO")
         else:
             logger.error(f"BillingWebhookService: Failed to update organization {org.id}")
             raise ValueError(f"Failed to update organization {org.id}")
