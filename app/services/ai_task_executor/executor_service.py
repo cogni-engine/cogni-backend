@@ -129,7 +129,7 @@ async def execute_ai_task(task: Task) -> Tuple[str, str]:
     task_deadline = task.deadline.strftime("%Y-%m-%d %H:%M") if task.deadline else "Not specified"
 
     # Initialize LLM with web search (minimal context) and structured output
-    llm = ChatOpenAI(model="gpt-5.1", use_responses_api=True)
+    llm = ChatOpenAI(model="gpt-5-mini", use_responses_api=True)
     web_search_tool = {"type": "web_search_preview", "search_context_size": "low"}
     llm_with_tools = llm.bind_tools([web_search_tool])
     structured_llm = llm_with_tools.with_structured_output(FormattedExecutionResponse)
@@ -151,7 +151,7 @@ async def execute_ai_task(task: Task) -> Tuple[str, str]:
 
         # Fallback: try without structured output
         try:
-            fallback_llm = ChatOpenAI(model="gpt-5.1", use_responses_api=True)
+            fallback_llm = ChatOpenAI(model="gpt-5-mini", use_responses_api=True)
             fallback_with_tools = fallback_llm.bind_tools([web_search_tool])
             fallback_chain = _executor_prompt | fallback_with_tools
 

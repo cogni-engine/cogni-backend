@@ -12,8 +12,8 @@ from app.models.note import Note, NoteCreate
 
 logger = logging.getLogger(__name__)
 
-# Initialize LLM with structured output
-llm = ChatOpenAI(model="gpt-5-mini", temperature=0.7)
+# Initialize LLM with structured output (lightweight model for onboarding)
+llm = ChatOpenAI(model="gpt-5-nano", temperature=0.7)
 structured_llm = llm.with_structured_output(FirstNoteContent)
 
 

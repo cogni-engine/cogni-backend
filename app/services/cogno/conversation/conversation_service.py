@@ -23,7 +23,7 @@ class MessageLike(Protocol):
     content: str
     files: Optional[List[Any]]
 
-STREAM_CHAT_MODEL = "gpt-5.1-chat-latest"
+STREAM_CHAT_MODEL = "gpt-5-mini"
 
 
 async def conversation_stream(
@@ -173,7 +173,7 @@ async def conversation_stream(
         # Stream LLM response
         llm_service = LLMService(model=STREAM_CHAT_MODEL, temperature=0.7)
         full_response = ""
-        
+
         async for chunk in llm_service.stream_invoke(messages):
             content = chunk.removeprefix("data: ").removesuffix("\n\n")
             wrapped_chunk = json.dumps({"data": content}, ensure_ascii=False)

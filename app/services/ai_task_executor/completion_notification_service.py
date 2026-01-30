@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 # LLMの初期化（structured outputを有効化）
-llm = ChatOpenAI(model="gpt-5-mini", temperature=0.7)
+llm = ChatOpenAI(model="gpt-5-nano", temperature=0.7)
 structured_llm = llm.with_structured_output(CompletionNotificationResponse)
 
 
