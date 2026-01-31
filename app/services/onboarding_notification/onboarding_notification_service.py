@@ -6,7 +6,7 @@ import logging
 from typing import Tuple
 from datetime import datetime, timezone, timedelta
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import supabase
 from app.infra.supabase.repositories.tasks import TaskRepository
@@ -34,10 +34,8 @@ TUTORIAL_TASK_CONTENT = {
 }
 
 # Initialize LLM (lightweight model for onboarding)
-llm = ChatOpenAI(model="gpt-5-nano", temperature=0.7)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
 
-# Web search tool for task result generation
-web_search_tool = {"type": "web_search_preview", "search_context_size": "low"}
 
 
 async def generate_tutorial_task_and_notification(
@@ -50,8 +48,8 @@ async def generate_tutorial_task_and_notification(
 
     Flow:
     1. Task: Fixed content (no LLM)
-    2. TaskResult: AI generated with web search (gpt-5-nano)
-    3. Notification: AI generated (gpt-5-nano)
+    2. TaskResult: AI generated with web search (gemini-2.5-flash-lite)
+    3. Notification: AI generated (gemini-2.5-flash-lite)
 
     Args:
         onboarding_session_id: The onboarding session ID
@@ -119,9 +117,8 @@ async def generate_tutorial_task_and_notification(
 
         task = await task_repo.create(task_create)
 
-        # 4. Generate TaskResult (AI + web search)
-        task_result_llm = llm.bind_tools([web_search_tool])
-        task_result_structured = task_result_llm.with_structured_output(TutorialTaskResultResponse)
+        # 4. Generate TaskResult (AI)
+        task_result_structured = llm.with_structured_output(TutorialTaskResultResponse)
         task_result_chain = task_result_prompt_template | task_result_structured
 
         task_result_response: TutorialTaskResultResponse = await task_result_chain.ainvoke({

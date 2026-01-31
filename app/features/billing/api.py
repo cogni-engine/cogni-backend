@@ -43,24 +43,16 @@ stripe_router = APIRouter(prefix="/api/stripe", tags=["stripe"])
 
 async def verify_webhook_signature(payload: bytes, signature: str) -> dict:
     """Verify Stripe webhook signature"""
-    print(f"\n{'='*60}")
-    print(f"🔐 Verifying webhook signature...")
-    print(f"{'='*60}")
-    
     try:
         event = stripe.Webhook.construct_event(
             payload, signature, STRIPE_WEBHOOK_SECRET
         )
-        print(f"✅ Signature verified successfully")
-        print(f"   Event ID: {event.get('id', 'unknown')}")
         logger.info(f"Stripe webhook signature verified for event {event.get('id')}")
         return event
     except ValueError as e:
-        print(f"❌ Invalid payload: {e}")
         logger.error(f"Invalid payload: {e}")
         raise HTTPException(status_code=400, detail="Invalid payload")
     except stripe.error.SignatureVerificationError as e:
-        print(f"❌ Invalid signature: {e}")
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
@@ -82,32 +74,20 @@ async def stripe_webhook(
     - customer.subscription.deleted: Subscription deleted
     - charge.dispute.created: Dispute created
     """
-    print(f"\n\n{'#'*60}")
-    print(f"# STRIPE WEBHOOK RECEIVED")
-    print(f"{'#'*60}")
-    
     # Get raw payload
     payload = await request.body()
-    print(f"📦 Payload size: {len(payload)} bytes")
     logger.info(f"Received Stripe webhook request (payload size: {len(payload)} bytes)")
-    
+
     # Verify webhook signature
     try:
         event = await verify_webhook_signature(payload, stripe_signature)
-    except HTTPException as e:
-        print(f"❌ Signature verification failed: {e.detail}")
+    except HTTPException:
         raise
-    
+
     event_type = event["type"]
     event_data = event["data"]["object"]
     event_id = event.get("id", "unknown")
-    
-    print(f"\n📋 Event Details:")
-    print(f"   Event ID: {event_id}")
-    print(f"   Event Type: {event_type}")
-    print(f"   Created: {event.get('created', 'unknown')}")
-    print(f"   Livemode: {event.get('livemode', 'unknown')}")
-    
+
     logger.info(f"Processing Stripe webhook event: {event_type} (ID: {event_id})")
     logger.debug(f"Full event data: {json.dumps(event, indent=2, default=str)}")
     
@@ -119,29 +99,15 @@ async def stripe_webhook(
     try:
         # Delegate to webhook service (pass event_id and raw_event)
         await webhook_service.handle_webhook_event(event_type, event_data, event_id, event)
-        
-        print(f"\n✅ Webhook processed successfully")
-        print(f"{'#'*60}\n\n")
         logger.info(f"Successfully processed webhook event {event_type} (ID: {event_id})")
-        
         return Response(status_code=200)
-    
+
     except Exception as e:
-        print(f"\n❌ ERROR processing webhook:")
-        print(f"   Event Type: {event_type}")
-        print(f"   Event ID: {event_id}")
-        print(f"   Error: {str(e)}")
-        print(f"   Error Type: {type(e).__name__}")
-        print(f"{'#'*60}\n\n")
-        
         logger.error(
             f"Error processing webhook {event_type} (ID: {event_id}): {e}",
             exc_info=True
         )
-        
         # Return 200 to prevent Stripe from retrying
-        # In production, you might want to log to a monitoring service
-        # and return appropriate status codes based on error type
         return Response(status_code=200)
 
 
@@ -169,24 +135,15 @@ async def upgrade_to_business(
     
     Requires: Owner or Admin role
     """
-    print(f"\n{'='*60}")
-    print(f"🚀 Business Plan Upgrade Request")
-    print(f"   User ID: {user_id}")
-    print(f"   Organization ID: {req.organization_id}")
-    print(f"{'='*60}")
-    
     logger.info(f"Processing Business upgrade for organization {req.organization_id}")
-    
+
     # Initialize services
     org_repo = OrganizationRepository(supabase)
     billing_service = BillingService(org_repo, supabase)
-    
+
     # Authorization & validation using single-responsibility methods
     org = await billing_service.get_organization_or_404(req.organization_id)
-    print(f"✅ Organization: {org.name}")
-    
     await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
-    print(f"✅ User authorized")
     
     billing_service.validate_plan_type(
         org, "pro", 
@@ -233,25 +190,15 @@ async def update_subscription_seats(
     For Business plan only.
     Requires: Owner or Admin role
     """
-    print(f"\n{'='*60}")
-    print(f"🎫 Manual Seat Update Request")
-    print(f"   User ID: {user_id}")
-    print(f"   Organization ID: {req.organization_id}")
-    print(f"   Requested Seats: {req.seat_count}")
-    print(f"{'='*60}")
-    
     logger.info(f"Manual seat update for organization {req.organization_id} to {req.seat_count} seats")
-    
+
     # Initialize services
     org_repo = OrganizationRepository(supabase)
     billing_service = BillingService(org_repo, supabase)
-    
+
     # Authorization & validation using single-responsibility methods
     org = await billing_service.get_organization_or_404(req.organization_id)
-    print(f"✅ Organization: {org.name}")
-    
     await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
-    print(f"✅ User authorized")
     
     billing_service.validate_plan_type(
         org, "business",
@@ -262,7 +209,6 @@ async def update_subscription_seats(
     
     # Check if update is needed
     if req.seat_count == org.seat_count:
-        print(f"ℹ️  Seat count unchanged: {req.seat_count}")
         return UpdateSeatsResponse(
             success=True,
             message="Seat count unchanged",
@@ -271,7 +217,6 @@ async def update_subscription_seats(
         )
     
     old_seat_count = org.seat_count
-    print(f"📝 Updating Stripe seats: {old_seat_count} → {req.seat_count}")
     
     # Update Stripe subscription quantity (validated to exist by validate_subscription_exists)
     assert org.stripe_subscription_id is not None
@@ -304,31 +249,19 @@ async def purchase_plan(
     
     This replaces the Next.js create-checkout-session and switch-to-team-billing routes
     """
-    print(f"\n{'='*60}")
-    print(f"🚀 Plan Purchase Request")
-    print(f"   User ID: {user_id}")
-    print(f"   Plan: {req.plan_id}")
-    print(f"   Organization ID: {req.organization_id}")
-    print(f"{'='*60}")
-    
     logger.info(f"Processing {req.plan_id} plan purchase for user {user_id}")
-    
+
     # Initialize services
     org_repo = OrganizationRepository(supabase)
     billing_service = BillingService(org_repo, supabase)
-    
+
     # Validate plan_id and get price
     price_id = billing_service.get_price_id(req.plan_id)
-    
+
     # Authorization & validation using single-responsibility methods
     org = await billing_service.get_organization_or_404(req.organization_id)
-    print(f"✅ Organization found: {org.name}")
-    
     await billing_service.verify_user_is_owner(req.organization_id, user_id)
-    print("✅ User verified as organization owner")
-    
     billing_service.validate_no_active_subscription(org)
-    print("✅ No active subscription found - proceeding with purchase")
     
     # Create or get Stripe customer
     customer_id = await billing_service.ensure_stripe_customer(org, user_id)
@@ -341,10 +274,6 @@ async def purchase_plan(
     )
     
     # Create Checkout Session
-    print("📝 Creating Stripe Checkout Session...")
-    print(f"   Price ID: {price_id}")
-    print(f"   Quantity: {quantity}")
-    
     session = billing_service.create_checkout_session(
         customer_id=customer_id,
         price_id=price_id,
@@ -354,12 +283,7 @@ async def purchase_plan(
         user_id=user_id,
         return_url=f"{CLIENT_URL}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
     )
-    
-    print("✅ Checkout Session created")
-    print(f"   Session ID: {session.id}")
-    print(f"   Client Secret: {session.client_secret[:20]}...")
-    print(f"{'='*60}\n")
-    
+
     logger.info(f"Checkout session created for organization {org.id}: {session.id}")
     
     return PurchasePlanResponse(
@@ -380,45 +304,28 @@ async def create_portal_session(
     Allows customers to manage their subscription, payment methods, invoices, etc.
     This replaces the Next.js create-portal-session route.
     """
-    print(f"\n{'='*60}")
-    print(f"🔐 Customer Portal Session Request")
-    print(f"   User ID: {user_id}")
-    print(f"   Organization ID: {req.organization_id}")
-    print(f"{'='*60}")
-    
     logger.info(f"Creating portal session for organization {req.organization_id}")
-    
+
     # Initialize services
     org_repo = OrganizationRepository(supabase)
     billing_service = BillingService(org_repo, supabase)
-    
+
     # Authorization & validation using single-responsibility methods
     org = await billing_service.get_organization_or_404(req.organization_id)
-    print(f"✅ Organization: {org.name}")
-    
     await billing_service.verify_user_is_owner_or_admin(req.organization_id, user_id)
-    print(f"✅ User is authorized")
     
     billing_service.validate_customer_exists(org)
     
     # Determine return URL
     return_url = req.return_url if req.return_url else f"{CLIENT_URL}/user/subscription"
-    
-    print(f"📝 Creating portal session...")
-    print(f"   Customer ID: {org.stripe_customer_id}")
-    print(f"   Return URL: {return_url}")
-    
+
     # Create portal session (validated to exist by validate_customer_exists)
     assert org.stripe_customer_id is not None
     portal_session = billing_service.create_portal_session(
         customer_id=org.stripe_customer_id,
         return_url=return_url
     )
-    
-    print(f"✅ Portal session created")
-    print(f"   URL: {portal_session.url[:50]}...")
-    print(f"{'='*60}\n")
-    
+
     logger.info(f"Portal session created for organization {req.organization_id}")
     
     return CreatePortalSessionResponse(url=portal_session.url)

@@ -157,7 +157,7 @@ async def _call_llm_for_decision(
 
     try:
         logger.info(f"Calling LLM with {len(chat_history)} messages and {len(task_list)} tasks")
-        llm_service = LLMService(model="gpt-5-nano", temperature=0.3)
+        llm_service = LLMService(model="gemini-2.5-flash-lite", temperature=0.3)
         decision = await llm_service.structured_invoke(messages, EngineDecision)
         logger.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
         return decision

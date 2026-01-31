@@ -1,6 +1,5 @@
-# pyproject.toml: add langchain-openai
-
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from typing import List, Dict, Type, TypeVar, cast, AsyncGenerator, Any, Union
 from pydantic import BaseModel
@@ -8,27 +7,35 @@ from pydantic import BaseModel
 T = TypeVar('T', bound=BaseModel)
 
 class LLMService:
-    def __init__(self, model: str = "gpt-5-mini", temperature: float = 0.7):
+    def __init__(self, model: str = "gemini-3-flash-preview", temperature: float = 0.7):
         """
         Initialize LLM Service.
-        
+
         Args:
-            model: Model name to use (default: "gpt-5-mini")
+            model: Model name to use (default: "gemini-3-flash-preview")
             temperature: Sampling temperature (default: 0.7)
         """
-        # Some models (like o1 series) don't support custom temperature
-        # Only set temperature if the model supports it
-        llm_kwargs = {
-            "model": model,
-            "streaming": True
-        }
-        
-        # Only add temperature for models that support it
-        # o1 models and some others only support temperature=1 (default)
-        if not model.startswith("o1") and "gpt-5.1" not in model:
-            llm_kwargs["temperature"] = temperature
-        
-        self.llm = ChatOpenAI(**llm_kwargs)
+        # Check if using Gemini model
+        if model.startswith("gemini"):
+            self.llm = ChatGoogleGenerativeAI(
+                model=model,
+                temperature=temperature
+            )
+        else:
+            # OpenAI models
+            # Some models (like o1 series) don't support custom temperature
+            # Only set temperature if the model supports it
+            llm_kwargs = {
+                "model": model,
+                "streaming": True
+            }
+
+            # Only add temperature for models that support it
+            # o1 models and some others only support temperature=1 (default)
+            if not model.startswith("o1") and "gpt-5.1" not in model:
+                llm_kwargs["temperature"] = temperature
+
+            self.llm = ChatOpenAI(**llm_kwargs)
     
     async def invoke(self, messages: List[Dict[str, str]], **kwargs) -> str:
         # Convert your dict format to LangChain messages

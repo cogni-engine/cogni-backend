@@ -2,7 +2,7 @@
 import logging
 from typing import Optional, List
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .prompts.anchor_suggestion_prompt import anchor_suggestion_prompt_template
 from .anchored_markdown import (
@@ -15,7 +15,7 @@ from .types import AISuggestionDict
 logger = logging.getLogger(__name__)
 
 # Initialize LLM (lightweight model for fast editing)
-llm = ChatOpenAI(model="gpt-5-nano", temperature=0.3)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.3)
 
 
 

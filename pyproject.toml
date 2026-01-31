@@ -10,6 +10,7 @@ python = "^3.13"
 langchain-core = "*"
 langchain = "*"
 langchain-openai = "*"
+langchain-google-genai = "^2.0.0"
 openai = "*"
 fastapi = "*"
 uvicorn = { extras = ["standard"], version = "*" }
