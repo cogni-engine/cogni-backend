@@ -2,7 +2,7 @@
 import logging
 from typing import Tuple, List, Any
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.models.task import Task
@@ -128,11 +128,9 @@ async def execute_ai_task(task: Task) -> Tuple[str, str]:
     current_datetime = get_current_datetime_ja()
     task_deadline = task.deadline.strftime("%Y-%m-%d %H:%M") if task.deadline else "Not specified"
 
-    # Initialize LLM with web search (minimal context) and structured output
-    llm = ChatOpenAI(model="gpt-5-mini", use_responses_api=True)
-    web_search_tool = {"type": "web_search_preview", "search_context_size": "low"}
-    llm_with_tools = llm.bind_tools([web_search_tool])
-    structured_llm = llm_with_tools.with_structured_output(FormattedExecutionResponse)
+    # Initialize LLM with structured output
+    llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview")
+    structured_llm = llm.with_structured_output(FormattedExecutionResponse)
 
     chain = _executor_prompt | structured_llm
 
@@ -151,9 +149,8 @@ async def execute_ai_task(task: Task) -> Tuple[str, str]:
 
         # Fallback: try without structured output
         try:
-            fallback_llm = ChatOpenAI(model="gpt-5-mini", use_responses_api=True)
-            fallback_with_tools = fallback_llm.bind_tools([web_search_tool])
-            fallback_chain = _executor_prompt | fallback_with_tools
+            fallback_llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview")
+            fallback_chain = _executor_prompt | fallback_llm
 
             fallback_result = await fallback_chain.ainvoke({
                 "task_title": task.title,

@@ -2,7 +2,7 @@
 from typing import List, Optional, Tuple
 import logging
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import supabase
 from app.infra.supabase.repositories.tasks import TaskRepository
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 # LLMの初期化（structured outputを有効化）
-llm = ChatOpenAI(model="gpt-5-mini", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=0)
 structured_llm = llm.with_structured_output(TaskListResponse)
 
 

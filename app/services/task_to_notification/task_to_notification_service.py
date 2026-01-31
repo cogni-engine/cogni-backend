@@ -2,7 +2,7 @@
 from typing import List
 import logging
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import supabase
 from app.infra.supabase.repositories.notifications import AINotificationRepository
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # LLMの初期化（structured outputを有効化）
-llm = ChatOpenAI(model="gpt-5-nano", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
 structured_llm = llm.with_structured_output(NotificationListResponse)
 
 

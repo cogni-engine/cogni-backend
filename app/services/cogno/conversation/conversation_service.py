@@ -23,7 +23,7 @@ class MessageLike(Protocol):
     content: str
     files: Optional[List[Any]]
 
-STREAM_CHAT_MODEL = "gpt-5-mini"
+STREAM_CHAT_MODEL = "gemini-3-flash-preview"
 
 
 async def conversation_stream(

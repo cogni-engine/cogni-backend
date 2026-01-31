@@ -2,7 +2,7 @@
 import logging
 from typing import List, Optional
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from .models.first_note_response import FirstNoteContent
 from .prompts.first_note_prompt import prompt_template
 from .fallback_content import get_fallback_content
@@ -13,7 +13,7 @@ from app.models.note import Note, NoteCreate
 logger = logging.getLogger(__name__)
 
 # Initialize LLM with structured output (lightweight model for onboarding)
-llm = ChatOpenAI(model="gpt-5-nano", temperature=0.7)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
 structured_llm = llm.with_structured_output(FirstNoteContent)
 
 

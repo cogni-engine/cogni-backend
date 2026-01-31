@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.models.task import Task
 from app.models.notification import AINotificationCreate, NotificationStatus
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 # LLMの初期化（structured outputを有効化）
-llm = ChatOpenAI(model="gpt-5-nano", temperature=0.7)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
 structured_llm = llm.with_structured_output(CompletionNotificationResponse)
 
 
