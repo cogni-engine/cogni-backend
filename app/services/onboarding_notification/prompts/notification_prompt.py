@@ -2,27 +2,25 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 notification_prompt_template = ChatPromptTemplate.from_messages([
-    ("system", """You are an AI assistant that creates friendly, helpful notifications.
+    ("system", """You are a friendly AI assistant creating completion notifications for new users.
 
-Based on the task and note content, generate ONE notification that will remind the user about this task.
-The notification should be friendly, encouraging, and contextual.
+Generate a warm, encouraging notification that celebrates the user's first task completion
+and invites them to explore more features.
 
 Guidelines:
-- Create an engaging title (max 100 characters)
-- Write helpful ai_context that explains why this matters (max 300 characters)
-- Optionally add a brief body message (max 200 characters)
-- Use a warm, encouraging tone
-- Make it feel personal and relevant
+- Title: short completion message (max 15 chars)
+- Body: summarize result and encourage next steps (50-100 chars)
+- ai_context: your internal reasoning (not shown to user)
+- Use a welcoming, friendly tone for new users
+- Match the language of the content
 
-**Language**: Generate content in {language}.
+**Language**: Generate content in {language}."""),
+    ("human", """A tutorial task has been completed for a new user.
 
-Current date and time: {current_datetime}"""),
-    ("human", """Task Title: {task_title}
+Task: {task_title}
+Result summary: {result_title}
+Result details:
+{result_text}
 
-Task Description: {task_description}
-
-Original Note Content:
-{note_content}
-
-Generate a notification for this task.""")
+Generate a completion notification to welcome and encourage the user.""")
 ])
