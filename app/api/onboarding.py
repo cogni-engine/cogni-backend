@@ -25,7 +25,7 @@ class GenerateFirstNoteRequest(BaseModel):
 
 
 @router.post("/generate-first-note", response_model=Note)
-def generate_first_note(request: GenerateFirstNoteRequest):
+async def generate_first_note(request: GenerateFirstNoteRequest):
     """
     Generate personalized first note content and create it in Supabase.
     Returns the created Note model with id, title, text, workspace_id, created_at, updated_at.
@@ -33,7 +33,7 @@ def generate_first_note(request: GenerateFirstNoteRequest):
     Falls back to default content if LLM fails, but note is still created.
     """
     try:
-        note = generate_first_note_and_create(
+        note = await generate_first_note_and_create(
             primary_role=request.primary_role,
             ai_relationship=request.ai_relationship,
             use_case=request.use_case,
