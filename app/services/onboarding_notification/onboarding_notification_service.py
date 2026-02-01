@@ -76,8 +76,14 @@ async def generate_tutorial_task_and_notification(
         context = response.data[0].get('context', {})
 
         first_note = context.get('firstNote', {})
-        note_id = first_note.get('noteId')
-        workspace_id = context.get('tutorialWorkspaceId')
+        note_id_raw = first_note.get('noteId')
+        workspace_id_raw = context.get('tutorialWorkspaceId')
+
+        # Ensure IDs are integers
+        note_id = int(note_id_raw) if note_id_raw is not None else None
+        workspace_id = int(workspace_id_raw) if workspace_id_raw is not None else None
+
+        logger.info(f"Tutorial context: note_id={note_id}, workspace_id={workspace_id}")
 
         # Get user's domain information from context (stored during onboarding)
         # Answers are nested under 'answers' key in OnboardingContext
@@ -93,9 +99,12 @@ async def generate_tutorial_task_and_notification(
 
         logger.info(f"User domain: role={user_role_str}, function={user_function_str}, use_case={user_use_case_str}")
 
-        # Get Mike and Lisa workspace member IDs
-        mike_workspace_member_id = context.get('mikeWorkspaceMemberId')
-        lisa_workspace_member_id = context.get('lisaWorkspaceMemberId')
+        # Get Mike and Lisa workspace member IDs (ensure they are integers)
+        mike_workspace_member_id_raw = context.get('mikeWorkspaceMemberId')
+        lisa_workspace_member_id_raw = context.get('lisaWorkspaceMemberId')
+
+        mike_workspace_member_id = int(mike_workspace_member_id_raw) if mike_workspace_member_id_raw is not None else None
+        lisa_workspace_member_id = int(lisa_workspace_member_id_raw) if lisa_workspace_member_id_raw is not None else None
 
         if not note_id:
             raise ValueError("First note ID not found in onboarding context")
@@ -104,6 +113,7 @@ async def generate_tutorial_task_and_notification(
             raise ValueError("Tutorial workspace ID not found in onboarding context")
 
         if not mike_workspace_member_id or not lisa_workspace_member_id:
+            logger.error(f"Mike/Lisa IDs missing: mike={mike_workspace_member_id_raw}, lisa={lisa_workspace_member_id_raw}, context keys={list(context.keys())}")
             raise ValueError("Mike or Lisa workspace member ID not found in onboarding context")
 
         # 2. Get the note content
@@ -258,6 +268,8 @@ async def generate_tutorial_task_and_notification(
         notifications.append(user_notification)  # This goes first for frontend compatibility
 
         # 7. Create Activity display notifications (WITH reactions - for Activity drawer)
+        logger.info(f"Creating activity notifications: mike_wm_id={mike_workspace_member_id}, lisa_wm_id={lisa_workspace_member_id}")
+
         activity_agents = [
             {
                 "name": "Mike",
@@ -272,6 +284,7 @@ async def generate_tutorial_task_and_notification(
         ]
 
         for agent in activity_agents:
+            logger.info(f"Creating notification for {agent['name']} with workspace_member_id={agent['workspace_member_id']}")
             activity_notification_create = AINotificationCreate(
                 title=notification_response.title,
                 ai_context=notification_response.ai_context,
