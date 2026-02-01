@@ -55,39 +55,40 @@ class GenerateTutorialNotificationRequest(BaseModel):
 
 
 class GenerateTutorialNotificationResponse(BaseModel):
-    task: Task
-    notification: AINotification
+    tasks: List[Task]
+    notifications: List[AINotification]
 
 
 @router.post("/generate-tutorial-notification", response_model=GenerateTutorialNotificationResponse)
 async def generate_tutorial_notification(request: GenerateTutorialNotificationRequest):
     """
-    Generate a task and notification from the tutorial note for onboarding.
+    Generate tasks and notifications from the tutorial note for onboarding.
+    Creates entries for both Mike and Lisa agents.
     Uses the edited tutorial note content as context.
-    
+
     Request:
     - onboarding_session_id: Onboarding session ID
     - user_id: User ID
     - locale: User's locale (e.g., "ja", "en-US")
-    
+
     Response:
-    - task: Full Task model with id, title, description, etc.
-    - notification: Full AINotification model with id, task_id, etc.
+    - tasks: List of Task models (one for Mike, one for Lisa)
+    - notifications: List of AINotification models with reactions
     """
     print(f"[API] POST /generate-tutorial-notification - session_id={request.onboarding_session_id}, user_id={request.user_id}, locale={request.locale}")
-    
+
     try:
-        task, notification = await generate_tutorial_task_and_notification(
+        tasks, notifications = await generate_tutorial_task_and_notification(
             onboarding_session_id=request.onboarding_session_id,
             user_id=request.user_id,
             locale=request.locale
         )
-        
-        print(f"[API] ✅ Response: task_id={task.id}, notification_id={notification.id}")
-        
+
+        print(f"[API] ✅ Response: tasks={[t.id for t in tasks]}, notifications={[n.id for n in notifications]}")
+
         return {
-            "task": task,
-            "notification": notification
+            "tasks": tasks,
+            "notifications": notifications
         }
     except Exception as e:
         print(f"[API] ❌ Failed to generate tutorial notification: {e}")

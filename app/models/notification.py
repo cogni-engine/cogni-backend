@@ -29,6 +29,17 @@ class NotificationAnalysisResponse(BaseModel):
     updates: List[Dict[str, Any]]
     summary: str
 
+class ReactionStatus(str, Enum):
+    """Reaction status enum for user responses to notifications"""
+    NONE = "None"
+    COMPLETED = "completed"
+    POSTPONED = "postponed"
+    DISMISSED = "dismissed"
+    IGNORED = "ignored"
+    REJECTED = "rejected"
+    IN_PROGRESS = "in_progress"
+
+
 class AINotificationBase(BaseModel):
     """Base AI notification fields"""
     title: str
@@ -40,6 +51,8 @@ class AINotificationBase(BaseModel):
     user_id: str  # UUID as string
     workspace_member_id: Optional[int] = None
     status: NotificationStatus = NotificationStatus.SCHEDULED
+    reaction_status: Optional[ReactionStatus] = None
+    reaction_text: Optional[str] = None
 
 
 class AINotificationCreate(AINotificationBase):

@@ -5,65 +5,96 @@ from langchain_core.prompts import ChatPromptTemplate
 prompt_template = ChatPromptTemplate.from_messages([
     (
         "system",
-        """You are an expert at creating personalized, actionable onboarding content for Cogno, an AI-powered productivity tool.
+        """あなたはユーザーの業務をサポートする優秀なアシスタントです。
 
-Generate a welcoming first note that shows users how Cogno can help them based on their role, work function, and use cases.
+ユーザーの役職・業務内容に基づいて、**実際の仕事で使える実用的なノート**を作成してください。
+製品の説明やチュートリアルではなく、ユーザーが今日から使える具体的なワークノートを生成します。
 
-**Tone**: Professional, helpful, friendly, and encouraging.
+## 重要な方針
 
-**Language**: Generate content in {language}.
+1. **製品説明は一切しない** - 「Cognoでできること」のような説明は不要
+2. **ユーザーの業務に直接役立つ内容** - 実際のプロジェクト、タスク、計画を想定
+3. **リアルな業務シナリオ** - 架空だが現実的な具体例を使う
+4. **すぐに編集・活用できる形式** - テンプレートとして使える構造
 
-**Structure**: Use well-structured Markdown with:
-- Clear headings (## for sections)
-- Bullet points for lists
-- Hierarchical checkboxes (- [ ] with indentation)
-- Template elements for user input (____ or [...])
+## 出力形式
 
-**Content Requirements**:
-1. Creative, personalized title (not generic)
-2. 500-800 characters of content
-3. 2-3 specific, concrete use case scenarios
-4. 3-5 actionable checklist items with hierarchy
-   - Include time-specific tasks ("at 10:00", "by afternoon")
-   - Include team communication tasks ("check with", "share with")
-5. Include fillable template elements
+**言語**: {language}
 
-**Specific scenarios**, like:
-- "Prepare agenda for Monday's 10:00 team meeting"
-- "Create Q4 product launch timeline and share with manager"
-- "Organize client feedback from this week and confirm with sales team"
-
-NOT generic like:
-- "Use Cogno for task management"
-
-**Template elements examples**:
-- "**Project Name**: ____"
-- "**Goals**: [fill in]"
-- "**Deadline**: __/__"
-
-**Hierarchical checklist example**:
+**構造** (Markdown):
 ```
-- [ ] Prepare Monday team meeting
-  - [ ] 9:00 Create agenda
-  - [ ] Check with Tanaka for previous notes
-  - [ ] 10:00 Meeting starts
+## [役職に関連した具体的なタイトル]
+
+[1-2文の導入。今週/今月の重点事項など]
+
+### 📋 今週の優先タスク
+
+- [ ] [具体的なタスク1 - 時間や担当者を含む]
+  - [ ] [サブタスク]
+  - [ ] [サブタスク]
+- [ ] [具体的なタスク2]
+- [ ] [具体的なタスク3]
+
+### 📊 進行中のプロジェクト
+
+**[プロジェクト名]**
+- 目標: ____
+- 期限: __/__
+- 次のアクション: ____
+
+### 💡 メモ・アイデア
+
+- [業務に関連したメモやリマインダー]
 ```
+
+## 例（マーケティングマネージャーの場合）
+
+```
+## Q1 マーケティング施策プランニング
+
+今四半期の重点施策と進捗を整理。来週の経営会議に向けて準備。
+
+### 📋 今週の優先タスク
+
+- [ ] 新製品ローンチキャンペーン企画
+  - [ ] 月曜 10:00 チームブレスト
+  - [ ] 水曜までにクリエイティブ案3つ
+  - [ ] 金曜 佐藤さんにレビュー依頼
+- [ ] SNS広告のROI分析レポート作成
+- [ ] インフルエンサー候補リストアップ
+
+### 📊 進行中のプロジェクト
+
+**春キャンペーン2025**
+- 目標: 新規リード500件獲得
+- 期限: 3/15
+- 次のアクション: LP原稿の最終確認
+
+### 💡 メモ・アイデア
+
+- 競合A社の新CMが話題 → 差別化ポイント再検討
+- 来月の展示会ブース予約確認
+```
+
+## 注意事項
+
+- 500-800文字程度
+- 必ず具体的な日時・人名（架空でOK）を含める
+- チェックボックス形式で実際にタスク管理できる形に
+- ユーザーがすぐに編集して使えるテンプレート形式
 """
     ),
     (
         "user",
-        """Generate a personalized first note for:
+        """以下のユーザー情報に基づいて、実用的なワークノートを作成してください：
 
-**Primary Role**: {primary_role}
-**Work Function**: {ai_relationship}
-**Use Case**: {use_case}
+**役職**: {primary_role}
+**業務領域**: {ai_relationship}
+**活用シーン**: {use_case}
 
-Include:
-- Time-specific tasks
-- Team communication tasks
-- Fillable template sections
-- Hierarchical checklists
+ユーザーの役職・業務に特化した、今日から使える具体的なノートを生成してください。
+製品の説明ではなく、実際の業務で使えるタスクリスト・プロジェクト管理ノートを作成します。
 
-Output in {language}."""
+言語: {language}"""
     )
 ])
