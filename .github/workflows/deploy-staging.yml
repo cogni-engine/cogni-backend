@@ -56,4 +56,6 @@ jobs:
             --allow-unauthenticated \
             --memory 512Mi \
             --cpu 1 \
-            --port 8000
+            --port 8000 \
+            --timeout 300 \
+            --max-instances 10
