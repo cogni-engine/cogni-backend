@@ -56,5 +56,4 @@ jobs:
             --allow-unauthenticated \
             --memory 512Mi \
             --cpu 1 \
-            --port 8000 \
-            --set-env-vars PORT=8000
+            --port 8000
