@@ -7,7 +7,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: Staging
 
     steps:
       - name: Checkout code
@@ -23,31 +23,31 @@ jobs:
 
       - name: Configure Docker auth
         env:
-          GCP_REGION: ${{ secrets.GCP_REGION }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
         run: gcloud auth configure-docker $GCP_REGION-docker.pkg.dev
 
       - name: Build Docker image
         env:
-          GCP_REGION: ${{ secrets.GCP_REGION }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_REPO: ${{ secrets.GCP_REPO }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
         run: |
           docker build -f Dockerfile.prod -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }} .
 
       - name: Push Docker image
         env:
-          GCP_REGION: ${{ secrets.GCP_REGION }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_REPO: ${{ secrets.GCP_REPO }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
         run: |
           docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }}
 
       - name: Deploy to Cloud Run
         env:
-          GCP_REGION: ${{ secrets.GCP_REGION }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          GCP_REPO: ${{ secrets.GCP_REPO }}
-          GCP_SERVICE: ${{ secrets.GCP_SERVICE }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
+          GCP_SERVICE: ${{ vars.GCP_SERVICE }}
         run: |
           gcloud run deploy $GCP_SERVICE \
             --image $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }} \
