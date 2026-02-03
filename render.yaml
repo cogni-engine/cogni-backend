@@ -12,7 +12,6 @@ services:
         value: "8000"
       # Add your secret environment variables in Render Dashboard:
       # - SUPABASE_URL
-      # - SUPABASE_KEY
       # - OPENAI_API_KEY
       # - WEBHOOK_SECRET
       # etc.

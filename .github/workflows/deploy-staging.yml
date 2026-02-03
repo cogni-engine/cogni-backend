@@ -58,4 +58,5 @@ jobs:
             --cpu 1 \
             --port 8000 \
             --timeout 300 \
-            --max-instances 10
+            --max-instances 10 \
+            --set-env-vars "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},SUPABASE_URL=${{ vars.SUPABASE_URL }},SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }},DATABASE_URL=${{ secrets.DATABASE_URL }},CLIENT_URL=${{ vars.CLIENT_URL }},WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }},STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }},STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }},STRIPE_PRICE_ID_PRO=${{ vars.STRIPE_PRICE_ID_PRO }},STRIPE_PRICE_ID_BUSINESS=${{ vars.STRIPE_PRICE_ID_BUSINESS }}"
