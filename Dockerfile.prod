@@ -49,13 +49,13 @@ ENV PYTHONUNBUFFERED=1
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/')" || exit 1
+# Health check - uses PORT environment variable
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import os, urllib.request; port = os.getenv('PORT', '8000'); urllib.request.urlopen(f'http://localhost:{port}/')" || exit 1
 
-# Production command - uses multiple workers for better performance
-# Adjust --workers based on your Render plan (2*CPU cores + 1 is recommended)
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --http h11
+# Production command
+# Cloud Run sets PORT automatically, so we read it from environment
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
 
 

@@ -1,0 +1,62 @@
+name: Deploy to Cloud Run (Staging)
+
+on:
+  push:
+    branches: [ staging ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: gcloud auth configure-docker $GCP_REGION-docker.pkg.dev
+
+      - name: Build Docker image
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
+        run: |
+          docker build -f Dockerfile.prod -t $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }} .
+
+      - name: Push Docker image
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
+        run: |
+          docker push $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REPO: ${{ vars.GCP_REPO }}
+          GCP_SERVICE: ${{ vars.GCP_SERVICE }}
+        run: |
+          gcloud run deploy $GCP_SERVICE \
+            --image $GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPO/api:${{ github.sha }} \
+            --region $GCP_REGION \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --cpu 1 \
+            --port 8000 \
+            --timeout 300 \
+            --max-instances 10 \
+            --set-env-vars "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }},SUPABASE_URL=${{ vars.SUPABASE_URL }},SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }},DATABASE_URL=${{ secrets.DATABASE_URL }},CLIENT_URL=${{ vars.CLIENT_URL }},WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }},STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }},STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }},STRIPE_PRICE_ID_PRO=${{ vars.STRIPE_PRICE_ID_PRO }},STRIPE_PRICE_ID_BUSINESS=${{ vars.STRIPE_PRICE_ID_BUSINESS }}"
