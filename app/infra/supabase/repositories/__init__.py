@@ -6,6 +6,7 @@ from .notes import NoteRepository
 from .notifications import AINotificationRepository
 from .tasks import TaskRepository
 from .threads import ThreadRepository
+from .working_memory import WorkingMemoryRepository
 from .workspaces import WorkspaceMemberRepository, WorkspaceRepository
 # OrganizationRepository moved to app.features.billing.repositories
 
@@ -22,7 +23,8 @@ class RepositoryFactory:
         self._notifications: AINotificationRepository
         self._workspaces: WorkspaceRepository
         self._workspace_members: WorkspaceMemberRepository
-        
+        self._working_memory: WorkingMemoryRepository
+
     
     @property
     def tasks(self) -> TaskRepository:
@@ -73,6 +75,13 @@ class RepositoryFactory:
             self._workspace_members = WorkspaceMemberRepository(self._client)
         return self._workspace_members
 
+    @property
+    def working_memory(self) -> WorkingMemoryRepository:
+        """Get working memory repository"""
+        if self._working_memory is None:
+            self._working_memory = WorkingMemoryRepository(self._client)
+        return self._working_memory
+
 
 
 __all__ = [
@@ -84,5 +93,6 @@ __all__ = [
     'AINotificationRepository',
     'WorkspaceRepository',
     'WorkspaceMemberRepository',
+    'WorkingMemoryRepository',
 ]
 

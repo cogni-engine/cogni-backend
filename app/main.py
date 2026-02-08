@@ -11,7 +11,7 @@ logging.basicConfig(
 
 from fastapi import FastAPI, APIRouter  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from app.api import cogno, notes, tasks, webhooks, push_notifications, users, note_ai_editor, onboarding, organizations  # noqa: E402
+from app.api import cogno, notes, tasks, webhooks, push_notifications, users, note_ai_editor, onboarding, organizations, memory  # noqa: E402
 from app.features import ai_notifications, billing  # noqa: E402
 
 app = FastAPI(
@@ -78,6 +78,7 @@ api_router.include_router(users.router)
 api_router.include_router(note_ai_editor.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(organizations.router)
+api_router.include_router(memory.router)
 api_router.include_router(ai_notifications.router)
 api_router.include_router(billing.router)
 
