@@ -63,13 +63,6 @@ class TaskBaseForAI(BaseModel):
         description="Task status: 'pending' or 'completed'"
     )
 
-    progress: Optional[int] = Field(
-        None,
-        ge=0,
-        le=100,
-        description="Progress percentage (0–100)"
-    )
-
     source_note_id: int = Field(
         description="Source Note ID (required)"
     )

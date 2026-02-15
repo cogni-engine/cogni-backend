@@ -90,7 +90,6 @@ class RecurringTaskService:
             next_run_time = self.calculate_next_run_time(recurrence_pattern)
 
         task_data = TaskCreate(
-            user_id=user_id,
             title=title,
             description=description,
             recurrence_pattern=recurrence_pattern,
@@ -98,7 +97,6 @@ class RecurringTaskService:
             is_ai_task=is_ai_task,
             status=None,
             deadline=None,
-            progress=None,
             source_note_id=kwargs.get("source_note_id"),
             assigner_id=kwargs.get("assigner_id"),
         )
@@ -136,7 +134,7 @@ class RecurringTaskService:
         # Build update data with only provided fields (non-None values)
         update_fields = {}
         field_mapping = [
-            "title", "description", "deadline", "status", "progress",
+            "title", "description", "deadline", "status",
             "completed_at", "recurrence_pattern", "is_ai_task",
             "is_recurring_task_active", "next_run_time"
         ]
@@ -223,7 +221,6 @@ class RecurringTaskService:
             next_run_time=new_next_run_time,
             status="pending",  # Reset status for next run
             completed_at=None,
-            progress=0,
         )
 
         updated_task = await self.task_repo.update(task_id, update_data)

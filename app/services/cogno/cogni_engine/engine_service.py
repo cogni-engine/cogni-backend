@@ -45,7 +45,7 @@ async def make_engine_decision(current_user_id: str, messages: Sequence[MessageL
     try:
 
         # Get user's tasks (exclude description to reduce data size)
-        all_tasks = await task_repo.find_by_user(current_user_id, exclude_description=True)
+        all_tasks = await task_repo.find_by_user_notes(current_user_id, exclude_description=True)
 
         now = datetime.now(timezone.utc)
         one_week_ago = now - timedelta(days=7)

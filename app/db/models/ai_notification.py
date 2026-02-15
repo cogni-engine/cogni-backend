@@ -2,8 +2,7 @@
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSONB
 import enum
 
 from app.db.base import Base
@@ -16,12 +15,6 @@ class NotificationStatus(str, enum.Enum):
     RESOLVED = "resolved"
 
 
-class ReactionStatus(str, enum.Enum):
-    """Reaction status enum for user reactions to notifications"""
-    NONE = "None"
-    COMPLETED = "completed"
-    POSTPONED = "postponed"
-    DISMISSED = "dismissed"
 
 
 class AINotification(Base):
@@ -37,7 +30,6 @@ class AINotification(Base):
     
     # Notification content
     title = Column(String, nullable=False)
-    ai_context = Column(Text, nullable=False)
     body = Column(Text, nullable=True)
     
     # Scheduling
@@ -50,15 +42,8 @@ class AINotification(Base):
         nullable=False, 
         index=True
     )
-    task_result_id = Column(
-        Integer, 
-        ForeignKey("task_results.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True
-    )
-    
-    # User information
-    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    # Workspace / member
+    workspace_id = Column(Integer, nullable=False, index=True)
     workspace_member_id = Column(Integer, nullable=True)
     
     # Status (using String instead of Enum to avoid conversion issues)
@@ -70,13 +55,9 @@ class AINotification(Base):
     )
     
     # User reaction
-    reaction_status = Column(
-        String,
-        default="None",
-        nullable=False,
-        index=True
-    )
     reaction_text = Column(Text, nullable=True)
+    reaction_choices = Column(JSONB, nullable=True)
+    reacted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     
     # Timestamps
     created_at = Column(
@@ -91,8 +72,5 @@ class AINotification(Base):
         nullable=False
     )
     
-    # Relationships
-    task_result = relationship("TaskResult", foreign_keys=[task_result_id])
-    
     def __repr__(self) -> str:
-        return f"<AINotification(id={self.id}, task_id={self.task_id}, status='{self.status.value}')>"
+        return f"<AINotification(id={self.id}, task_id={self.task_id}, status='{self.status}')>"

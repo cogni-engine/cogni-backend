@@ -316,11 +316,10 @@ async def process_recurring_tasks():
                             # 新しい通知を作成
                             new_notification = AINotificationCreate(
                                 title=notification.title,
-                                ai_context=notification.ai_context,
                                 body=notification.body,
                                 due_date=new_due_date,
                                 task_id=task_id,
-                                user_id=notification.user_id,
+                                workspace_id=notification.workspace_id,
                                 workspace_member_id=notification.workspace_member_id,
                                 status=notification.status
                             )
@@ -426,16 +425,25 @@ async def _execute_ai_tasks_common(
             "tasks_executed": 0
         }
     
-    # user_idフィルタリングを適用
+    # user_idフィルタリングを適用（workspace_member_note経由でassigneeのuser_idを取得）
     if user_id_filter and ai_tasks:
-        if exclude_user_ids:
-            # 開発者を除外
-            ai_tasks = [task for task in ai_tasks if task.get("user_id") not in user_id_filter]
-            logger.info(f"After excluding dev users: {len(ai_tasks)} AI tasks")
-        else:
-            # 開発者のみ
-            ai_tasks = [task for task in ai_tasks if task.get("user_id") in user_id_filter]
-            logger.info(f"After filtering dev users only: {len(ai_tasks)} AI tasks")
+        from app.infra.supabase.repositories.notes import NoteRepository
+        note_repo = NoteRepository(supabase)
+        filtered_tasks = []
+        for task in ai_tasks:
+            note_id = task.get("source_note_id")
+            if not note_id:
+                if exclude_user_ids:
+                    filtered_tasks.append(task)  # note無しはdev除外時は含める
+                continue
+            assignee_user_ids = await note_repo.get_note_assignee_user_ids(note_id)
+            has_match = any(uid in user_id_filter for uid in assignee_user_ids)
+            if exclude_user_ids and not has_match:
+                filtered_tasks.append(task)
+            elif not exclude_user_ids and has_match:
+                filtered_tasks.append(task)
+        ai_tasks = filtered_tasks
+        logger.info(f"After user_id filtering: {len(ai_tasks)} AI tasks")
     
     if not ai_tasks:
         return {
@@ -486,24 +494,23 @@ async def _execute_ai_tasks_common(
                     due_date = task.next_run_time
                     
                     try:
-                        notification = await generate_completion_notification(
+                        notification_creates = await generate_completion_notification(
                             task=task,
                             result_title=result_title,
                             result_text=result_text,
                             due_date=due_date,
-                            task_result_id=saved_result.id
                         )
-                        
-                        # 通知を保存
-                        saved_notification = await notification_repo.create(notification)
-                        notifications_created += 1
-                        
-                        logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
+
+                        # 通知を保存（assigneeごと）
+                        for notif_create in notification_creates:
+                            saved_notification = await notification_repo.create(notif_create)
+                            notifications_created += 1
+                            logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
                     except Exception as e:
                         logger.error(f"Failed to create completion notification for task {task.id}: {e}")
                 else:
                     logger.warning(f"Task {task.id}: next_run_time is None, skipping notification creation")
-                
+
                 return {
                     "status": "ok",
                     "task_id": task.id,
@@ -624,19 +631,18 @@ async def execute_ai_task_by_id(task_id: int):
             due_date = task.next_run_time
             
             try:
-                notification = await generate_completion_notification(
+                notification_creates = await generate_completion_notification(
                     task=task,
                     result_title=result_title,
                     result_text=result_text,
                     due_date=due_date,
-                    task_result_id=saved_result.id
                 )
-                
-                # 通知を保存
-                saved_notification = await notification_repo.create(notification)
-                notification_created = True
-                
-                logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
+
+                # 通知を保存（assigneeごと）
+                for notif_create in notification_creates:
+                    saved_notification = await notification_repo.create(notif_create)
+                    notification_created = True
+                    logger.info(f"📬 Task {task.id}: Created completion notification {saved_notification.id} with due_date {due_date}")
             except Exception as e:
                 logger.error(f"Failed to create completion notification for task {task.id}: {e}")
         else:

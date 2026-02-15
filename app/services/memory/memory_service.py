@@ -1,26 +1,28 @@
-"""Working memory event processing service
+"""Memory event processing service
 
-イベント駆動型でタスク・通知を管理するサービス。
-フロントエンドからの型付きイベントを受け取り、
-LLM（Gemini）を使って working_memory の内容を基にタスク・通知を賢く管理する。
+SourceDiff / Reaction を受け取り、LLM を使って
+タスク・通知・working_memory を管理するサービス。
+API イベント型からの変換は API 層（api/memory.py）の責務。
 """
 from __future__ import annotations
 
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any, Union, TYPE_CHECKING
+from typing import Optional, List, Dict, Any
 
 from app.config import supabase
 from app.infra.supabase.repositories.working_memory import WorkingMemoryRepository
 from app.infra.supabase.repositories.tasks import TaskRepository
 from app.infra.supabase.repositories.notifications import AINotificationRepository
-from app.infra.supabase.repositories.workspaces import WorkspaceMemberRepository
+from app.infra.supabase.repositories.workspaces import WorkspaceMemberRepository, WorkspaceRepository
+from app.infra.supabase.repositories.notes import NoteRepository
 from app.models.working_memory import WorkingMemory
 from app.models.task import Task, TaskCreate, TaskUpdate
 from app.models.notification import AINotification, AINotificationCreate, AINotificationUpdate
-from app.utils.datetime_helper import get_current_datetime_ja
+from app.utils.datetime_helper import get_current_datetime_ja, convert_jst_to_utc
 
+from .schemas import SourceDiff, Reaction
 from .llm import (
     task_resolve_chain,
     task_notification_chain,
@@ -28,94 +30,68 @@ from .llm import (
     memory_summary_chain,
 )
 
-if TYPE_CHECKING:
-    from app.api.memory import NoteEventRequest, ChatEventRequest
-
 logger = logging.getLogger(__name__)
 
-# 型エイリアス
-Event = Union["NoteEventRequest", "ChatEventRequest"]
 
-
-class WorkingMemoryService:
-    """Working memory を軸にしたイベント駆動型タスク・通知管理サービス"""
+class MemoryService:
+    """Memory を軸にしたイベント駆動型タスク・通知管理サービス"""
 
     def __init__(self):
         self._memory_repo = WorkingMemoryRepository(supabase)
         self._task_repo = TaskRepository(supabase)
         self._notification_repo = AINotificationRepository(supabase)
         self._workspace_member_repo = WorkspaceMemberRepository(supabase)
+        self._workspace_repo = WorkspaceRepository(supabase)
+        self._note_repo = NoteRepository(supabase)
 
     # ------------------------------------------------------------------
     # メインエントリポイント
     # ------------------------------------------------------------------
 
-    async def process_event(
+    async def process_events(
         self,
         workspace_id: int,
-        event: Event,
+        source_diffs: List[SourceDiff],
+        reactions: List[Reaction],
     ) -> Dict[str, Any]:
-        """イベント処理のオーケストレーター。
-
-        フロー:
-        1. resolve_tasks_from_event    — タスクの更新/新規作成（LLM 1回）
-        2. generate_task_notifications — 変更タスクに通知生成（LLM）
-        3. optimize_notifications      — 配信予定通知を選別（LLM）
-        4. update_working_memory       — working_memory更新（LLM）
-        """
+        """唯一のエントリポイント。SourceDiff + Reaction を受け取り Step 1-4 を実行。"""
         total_start = time.time()
         logger.info(
             "=" * 60 + "\n"
-            f"[ORCHESTRATOR] START process_event\n"
+            f"[ORCHESTRATOR] START process_events\n"
             f"  workspace_id={workspace_id}\n"
-            f"  event_type={event.event_type}"
+            f"  source_diffs={len(source_diffs)}, reactions={len(reactions)}"
         )
 
-        # ---- 共通データの一括取得（DB読み込み3回） ----
+        # ---- 共通データの一括取得 ----
         db_start = time.time()
         working_memory = await self.get_memory(workspace_id)
-        logger.info(
-            f"[ORCHESTRATOR] DB[1/3] working_memory loaded: "
-            f"exists={working_memory is not None}, "
-            f"content_len={len(working_memory.content) if working_memory and working_memory.content else 0}"
-        )
-
         members = await self._workspace_member_repo.find_by_workspace(workspace_id)
-        logger.info(
-            f"[ORCHESTRATOR] DB[2/3] members loaded: count={len(members)}, "
-            f"user_ids={[m.user_id for m in members]}"
-        )
 
-        # 24h以内のscheduled通知を一括取得
         existing_notifications: List[AINotification] = []
-        if members:
-            now = datetime.now(timezone.utc)
-            window_end = now + timedelta(hours=24)
-            response = (
-                supabase.table("ai_notifications")
-                .select("*")
-                .eq("user_id", members[0].user_id)
-                .eq("status", "scheduled")
-                .gte("due_date", now.isoformat())
-                .lte("due_date", window_end.isoformat())
-                .execute()
-            )
-            if response.data:
-                for row in response.data:
-                    existing_notifications.append(AINotification(**row))
-        logger.info(
-            f"[ORCHESTRATOR] DB[3/3] existing_notifications loaded: "
-            f"count={len(existing_notifications)}, "
-            f"ids={[n.id for n in existing_notifications]}"
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(hours=24)
+        response = (
+            supabase.table("ai_notifications")
+            .select("*")
+            .eq("workspace_id", workspace_id)
+            .eq("status", "scheduled")
+            .gte("due_date", now.isoformat())
+            .lte("due_date", window_end.isoformat())
+            .execute()
         )
+        if response.data:
+            for row in response.data:
+                existing_notifications.append(AINotification(**row))
         logger.info(f"[ORCHESTRATOR] DB bulk load done in {time.time() - db_start:.2f}s")
 
         # --- Step 1: タスク解決 ---
         step1_start = time.time()
-        logger.info("-" * 40 + " STEP 1: _resolve_tasks_from_event " + "-" * 40)
-        task_result = await self._resolve_tasks_from_event(
+        logger.info("-" * 40 + " STEP 1: _resolve_tasks " + "-" * 40)
+        task_result = await self._resolve_tasks(
             workspace_id=workspace_id,
-            event=event,
+            source_diffs=source_diffs,
+            reactions=reactions,
             working_memory=working_memory,
             members=members,
         )
@@ -161,13 +137,11 @@ class WorkingMemoryService:
         logger.info("-" * 40 + " STEP 4: _update_working_memory " + "-" * 40)
         memory_result = await self._update_working_memory(
             workspace_id=workspace_id,
-            event=event,
+            source_diffs=source_diffs,
+            reactions=reactions,
             working_memory=working_memory,
-            processing_result={
-                "task_result": task_result,
-                "notification_result": notification_result,
-                "optimize_result": optimize_result,
-            },
+            tasks_created=task_result["tasks_created"],
+            tasks_updated=task_result["tasks_updated"],
             final_notifications=final_notifications,
         )
         logger.info(
@@ -177,7 +151,7 @@ class WorkingMemoryService:
 
         logger.info(
             "=" * 60 + "\n"
-            f"[ORCHESTRATOR] DONE process_event in {time.time() - total_start:.2f}s\n"
+            f"[ORCHESTRATOR] DONE process_events in {time.time() - total_start:.2f}s\n"
             f"  tasks: created={task_result['tasks_created']}, updated={task_result['tasks_updated']}\n"
             f"  notifications: created={notification_result['notifications_created']}, "
             f"deleted={optimize_result['notifications_deleted']}, "
@@ -203,84 +177,131 @@ class WorkingMemoryService:
         }
 
     # ------------------------------------------------------------------
-    # Step 1: タスク解決（workspace単位・task_resolve_chain 1回）
+    # Step 1: タスク解決（統一メソッド）
     # ------------------------------------------------------------------
 
-    async def _resolve_tasks_from_event(
+    async def _resolve_tasks(
         self,
         workspace_id: int,
-        event: Event,
+        source_diffs: List[SourceDiff],
+        reactions: List[Reaction],
         working_memory: Optional[WorkingMemory],
         members: List,
     ) -> Dict[str, Any]:
-        """event + working_memory を見て、LLMで既存タスクを更新 or 新規作成する。
-
-        task_resolve_chain に全情報を渡し、updates / creates を1回のLLM callで解決する。
-        """
-        if event.event_type != "note_updated":
-            logger.info(f"[Step1] SKIP: unsupported event_type={event.event_type}")
-            return {"tasks_created": 0, "tasks_updated": 0, "affected_tasks": [], "details": []}
-
+        """全ソース差分 + リアクションを1回のLLM callでタスク解決する。"""
         if not members:
             logger.warning(f"[Step1] No workspace members for workspace {workspace_id}, SKIP")
             return {"tasks_created": 0, "tasks_updated": 0, "affected_tasks": [], "details": []}
 
-        note_id = event.note_id
-        diff = event.diff
+        if not source_diffs and not reactions:
+            logger.info("[Step1] SKIP: no source_diffs and no reactions")
+            return {"tasks_created": 0, "tasks_updated": 0, "affected_tasks": [], "details": []}
+
         current_datetime = get_current_datetime_ja()
         wm_content = working_memory.content if working_memory and working_memory.content else "None"
 
-        # ノート情報をフォーマット（バッチ対応: 現在は1件）
-        notes_info = (
-            f"NoteID: {note_id}\n"
-            f"Title: {diff.title or 'None'}\n"
-            f"Text: {diff.text or ''}"
-        )
+        # --- 既存タスク収集 ---
+        # source_diffs から find_by_sources
+        existing_tasks: List[Task] = []
+        if source_diffs:
+            # source_type ごとにグループ化して一括取得
+            sources_by_type: Dict[str, List[int]] = {}
+            for sd in source_diffs:
+                sources_by_type.setdefault(sd.source_type, []).append(sd.source_id)
+            for st, sids in sources_by_type.items():
+                existing_tasks.extend(await self._task_repo.find_by_sources(st, sids))
 
-        # このノートに紐づく既存タスクを検索
-        existing_tasks = await self._task_repo.find_by_note(note_id)
+        # reactions から find_by_ids
+        reaction_task_ids = [r.task_id for r in reactions]
+        if reaction_task_ids:
+            reaction_tasks = await self._task_repo.find_by_ids(reaction_task_ids)
+            # dedup
+            existing_ids = {t.id for t in existing_tasks}
+            for t in reaction_tasks:
+                if t.id not in existing_ids:
+                    existing_tasks.append(t)
+                    existing_ids.add(t.id)
 
+        # --- タスク未作成ソースの特定 ---
+        tasks_by_source: Dict[tuple, List[Task]] = {}
+        for t in existing_tasks:
+            key = (t.source_type or "", t.source_id or 0)
+            tasks_by_source.setdefault(key, []).append(t)
+
+        orphan_sources = [
+            (sd.source_type, sd.source_id)
+            for sd in source_diffs
+            if (sd.source_type, sd.source_id) not in tasks_by_source
+        ]
+
+        # --- LLMコンテキスト組み立て ---
+        # sources_info
+        if source_diffs:
+            sources_info = "\n\n---\n\n".join([
+                f"SourceType: {sd.source_type}\n"
+                f"SourceID: {sd.source_id}\n"
+                f"Title: {sd.title or 'None'}\n"
+                f"Content: {sd.content or ''}"
+                for sd in source_diffs
+            ])
+        else:
+            sources_info = "None (reaction event — no source changes)"
+
+        # tasks_info
         if existing_tasks:
             tasks_info = "\n\n---\n\n".join([
-                f"TaskID: {t.id}\nSourceNoteID: {t.source_note_id}\n"
+                f"TaskID: {t.id}\nSourceType: {t.source_type or ''}\n"
+                f"SourceID: {t.source_id}\n"
                 f"Title: {t.title}\nDescription: {t.description or ''}"
                 for t in existing_tasks
             ])
-            orphan_note_ids = "None"
         else:
             tasks_info = "None"
-            orphan_note_ids = str(note_id)
+
+        # sources_without_tasks
+        if orphan_sources:
+            sources_without_tasks = "\n".join(
+                f"- source_type={st}, source_id={sid}" for st, sid in orphan_sources
+            )
+        else:
+            sources_without_tasks = "None"
+
+        # reactions_info
+        reactions_info = "None"
+        reaction_count = 0
+        if existing_tasks:
+            task_ids = [t.id for t in existing_tasks]
+            reactions_info, reaction_count = await self._fetch_reactions_info(task_ids)
 
         logger.info(
             f"[Step1] Input:\n"
-            f"  note_id={note_id}\n"
-            f"  diff.title={diff.title!r}\n"
-            f"  diff.text={diff.text!r}\n"
+            f"  source_diffs={len(source_diffs)}, reactions={len(reactions)}\n"
             f"  existing_tasks={len(existing_tasks)} (ids={[t.id for t in existing_tasks]})\n"
-            f"  orphan_note_ids={orphan_note_ids}\n"
-            f"  current_datetime={current_datetime}\n"
-            f"  working_memory_content_len={len(wm_content)}"
+            f"  orphan_sources={orphan_sources}\n"
+            f"  reaction_count={reaction_count}\n"
+            f"  current_datetime={current_datetime}"
         )
 
         # --- LLM 1回: task_resolve_chain ---
         logger.info(
-            f"[Step1] LLM CALL: task_resolve_chain\n"
-            f"  note_count=1, task_count={len(existing_tasks)}"
+            f"[Step1] LLM CALL: task_resolve_chain "
+            f"(sources={len(source_diffs)}, tasks={len(existing_tasks)})"
         )
         llm_start = time.time()
         result = await task_resolve_chain.ainvoke({
             "current_datetime": current_datetime,
             "working_memory_content": wm_content,
-            "note_count": 1,
-            "notes_info": notes_info,
+            "source_count": len(source_diffs),
+            "sources_info": sources_info,
             "task_count": len(existing_tasks),
             "tasks_info": tasks_info,
-            "orphan_note_ids": orphan_note_ids,
+            "sources_without_tasks": sources_without_tasks,
+            "reaction_count": reaction_count,
+            "reactions_info": reactions_info,
         })
         logger.info(
-            f"[Step1] LLM RESPONSE ({time.time() - llm_start:.2f}s):\n"
-            f"  ai_context={result.ai_context!r}\n"
-            f"  updates={len(result.updates)}, creates={len(result.creates)}"
+            f"[Step1] LLM RESPONSE ({time.time() - llm_start:.2f}s): "
+            f"updates={len(result.updates)}, creates={len(result.creates)}"
         )
 
         affected_tasks: List[Task] = []
@@ -316,20 +337,28 @@ class WorkingMemoryService:
                 logger.info(f"[Step1] DB UPDATE task {item.task_id} OK")
 
         # --- 新規タスク作成 ---
-        member = members[0]
+        valid_orphan_sources = set(orphan_sources)
         for i, item in enumerate(result.creates):
             logger.info(
-                f"[Step1] CREATE[{i}]: note_id={item.note_id}, "
+                f"[Step1] CREATE[{i}]: source_type={item.source_type}, source_id={item.source_id}, "
                 f"title={item.title!r}, description_len={len(item.description)}"
             )
+            if (item.source_type, item.source_id) not in valid_orphan_sources:
+                logger.warning(
+                    f"[Step1] INVALID source ({item.source_type}, {item.source_id}) from LLM, skipping"
+                )
+                continue
 
+            assignees = await self._resolve_assignees(
+                workspace_id, item.source_type, item.source_id
+            )
             create_data = TaskCreate(
                 title=item.title,
+                workspace_id=workspace_id,
                 description=item.description,
-                source_note_id=item.note_id,
-                user_id=member.user_id,
-                workspace_member_id=member.id,
-                status="pending",
+                source_type=item.source_type,
+                source_id=item.source_id,
+                assignees=assignees,
             )
             created = await self._task_repo.create(create_data)
             affected_tasks.append(created)
@@ -342,6 +371,7 @@ class WorkingMemoryService:
             })
             logger.info(f"[Step1] DB CREATE task {created.id} OK")
 
+        logger.info(f"[Step1] DONE: created={tasks_created}, updated={tasks_updated}")
         return {
             "tasks_created": tasks_created,
             "tasks_updated": tasks_updated,
@@ -366,12 +396,10 @@ class WorkingMemoryService:
         current_datetime = get_current_datetime_ja()
         wm_content = working_memory.content if working_memory and working_memory.content else "None"
 
-        # 全タスクをまとめてフォーマット
+        # 全タスクをまとめてフォーマット（リアクション履歴を含む全文を渡す）
         tasks_info = "\n\n---\n\n".join([
             f"TaskID: {t.id}\nTitle: {t.title}\n"
-            f"Description: {(t.description or '')[:200]}\n"
-            f"Deadline: {t.deadline.isoformat() if t.deadline else 'None'}\n"
-            f"Status: {t.status or 'pending'}\nProgress: {t.progress or 0}%"
+            f"Description: {t.description or ''}"
             for t in affected_tasks
         ])
 
@@ -398,8 +426,7 @@ class WorkingMemoryService:
             logger.info(
                 f"[Step2] LLM notif[{i}]: task_id={notif.task_id}, "
                 f"title={notif.title!r}, body={notif.body!r}, "
-                f"due_date={notif.due_date.isoformat()}, "
-                f"ai_context={notif.ai_context!r}"
+                f"due_date={notif.due_date.isoformat()}"
             )
 
         # 生成された通知をDBに保存 & メモリ上でも保持
@@ -417,29 +444,45 @@ class WorkingMemoryService:
                 )
             task = next(t for t in affected_tasks if t.id == task_id)
 
-            saved = await self._notification_repo.create(
-                AINotificationCreate(
-                    title=notif.title,
-                    ai_context=notif.ai_context,
-                    body=notif.body,
-                    due_date=notif.due_date,
-                    task_id=task_id,
-                    user_id=task.user_id,
-                    workspace_member_id=task.workspace_member_id,
+            # LLMは日本時間で返すのでUTCに変換してからDBに保存
+            due_date_utc = convert_jst_to_utc(notif.due_date)
+            reacted_at_utc = convert_jst_to_utc(notif.reacted_at) if notif.reacted_at else None
+
+            # task.assignees から直接 workspace_member_id を取得
+            assignees = task.assignees or []
+            if not assignees:
+                logger.warning(f"[Step2] No assignees for task {task.id}, skipping notification")
+                continue
+
+            for assignee in assignees:
+                workspace_member_id = assignee.get("workspace_member_id")
+                if not workspace_member_id:
+                    continue
+                saved = await self._notification_repo.create(
+                    AINotificationCreate(
+                        title=notif.title,
+                        body=notif.body,
+                        due_date=due_date_utc,
+                        task_id=task_id,
+                        workspace_id=task.workspace_id,
+                        workspace_member_id=workspace_member_id,
+                        reaction_choices=notif.reaction_choices,
+                        reacted_at=reacted_at_utc,
+                    )
                 )
-            )
-            created_notifications.append(saved)
-            details.append({
-                "notification_id": saved.id,
-                "task_id": task_id,
-                "title": saved.title,
-                "body": saved.body,
-                "due_date": notif.due_date.isoformat(),
-            })
-            logger.info(
-                f"[Step2] DB CREATE notification {saved.id}: "
-                f"task_id={task_id}, title={saved.title!r}, due={notif.due_date.isoformat()}"
-            )
+                created_notifications.append(saved)
+                details.append({
+                    "notification_id": saved.id,
+                    "task_id": task_id,
+                    "workspace_member_id": workspace_member_id,
+                    "title": saved.title,
+                    "body": saved.body,
+                    "due_date": notif.due_date.isoformat(),
+                })
+                logger.info(
+                    f"[Step2] DB CREATE notification {saved.id}: "
+                    f"task_id={task_id}, wm={workspace_member_id}, title={saved.title!r}, due={notif.due_date.isoformat()}"
+                )
 
         return {
             "notifications_created": len(created_notifications),
@@ -483,10 +526,10 @@ class WorkingMemoryService:
         notifications_info = "\n\n".join([
             f"NotificationID: {n.id}\n"
             f"TaskID: {n.task_id}\n"
+            f"WorkspaceMemberID: {n.workspace_member_id}\n"
             f"Title: {n.title}\n"
             f"Body: {n.body}\n"
-            f"DueDate: {n.due_date.isoformat()}\n"
-            f"AIContext: {n.ai_context}"
+            f"DueDate: {n.due_date.isoformat()}"
             for n in all_notifications
         ])
 
@@ -572,7 +615,7 @@ class WorkingMemoryService:
                 body=item.body,
             )
             if item.due_date:
-                update_data.due_date = item.due_date
+                update_data.due_date = convert_jst_to_utc(item.due_date)
 
             updated = await self._notification_repo.update(item.notification_id, update_data)
             if updated:
@@ -615,52 +658,48 @@ class WorkingMemoryService:
         }
 
     # ------------------------------------------------------------------
-    # Step 4: working_memory 更新
+    # Step 4: working_memory 更新（統一版）
     # ------------------------------------------------------------------
 
     async def _update_working_memory(
         self,
         workspace_id: int,
-        event: Event,
+        source_diffs: List[SourceDiff],
+        reactions: List[Reaction],
         working_memory: Optional[WorkingMemory],
-        processing_result: Dict[str, Any],
+        tasks_created: int,
+        tasks_updated: int,
         final_notifications: List[AINotification],
     ) -> Dict[str, Any]:
-        """final_notifications + event + 元のmemoryからLLMで要約を生成する。"""
+        """SourceDiff + Reaction からサマリーを構築し、LLMでworking_memoryを更新する。"""
         current_datetime = get_current_datetime_ja()
         old_content = working_memory.content if working_memory and working_memory.content else ""
 
-        # 通知予定をフォーマット（DB取得なし）
         notifications_schedule = "\n".join([
             f"- [{n.due_date.isoformat()}] {n.title}: {n.body} (task #{n.task_id})"
             for n in final_notifications
         ]) or "No scheduled notifications"
 
-        # イベント情報を events_summary として構築
-        if event.event_type == "note_updated":
-            events_summary = f"Note updated (note_id={event.note_id})"
-            if event.diff.title:
-                events_summary += f"\n  Title: {event.diff.title}"
-            if event.diff.text:
-                events_summary += f"\n  Text: {event.diff.text}"
-        elif event.event_type == "chat_message":
-            events_summary = f"Chat message (thread_id={event.thread_id})"
-            if event.diff.content:
-                events_summary += f"\n  Content: {event.diff.content}"
-        else:
-            events_summary = f"Unknown event: {event.event_type}"
-
-        # 処理結果
-        tr = processing_result.get("task_result", {})
+        # SourceDiff + Reaction から events_summary を組み立て
+        parts = []
+        for sd in source_diffs:
+            s = f"Source updated ({sd.source_type}, id={sd.source_id})"
+            if sd.title:
+                s += f"\n  Title: {sd.title}"
+            if sd.content:
+                s += f"\n  Content: {sd.content}"
+            parts.append(s)
+        for r in reactions:
+            desc = f'"{r.reaction_text}"' if r.reaction_text else "無視（反応なし）"
+            parts.append(f"Notification reaction (id={r.notification_id})\n  Reaction: {desc}")
+        events_summary = "\n\n".join(parts) or "No events"
 
         logger.info(
             f"[Step4] Input:\n"
             f"  old_content_len={len(old_content)}\n"
-            f"  events_summary={events_summary!r}\n"
-            f"  tasks_created={tr.get('tasks_created', 0)}\n"
-            f"  tasks_updated={tr.get('tasks_updated', 0)}\n"
-            f"  final_notifications={len(final_notifications)}\n"
-            f"  notifications_schedule:\n{notifications_schedule}"
+            f"  source_diffs={len(source_diffs)}, reactions={len(reactions)}\n"
+            f"  tasks_created={tasks_created}, tasks_updated={tasks_updated}\n"
+            f"  final_notifications={len(final_notifications)}"
         )
         logger.info("[Step4] LLM CALL: memory_summary_chain")
 
@@ -670,14 +709,12 @@ class WorkingMemoryService:
             "current_content": old_content or "Empty (first event)",
             "events_summary": events_summary,
             "notifications_schedule": notifications_schedule,
-            "tasks_created": tr.get("tasks_created", 0),
-            "tasks_updated": tr.get("tasks_updated", 0),
+            "tasks_created": tasks_created,
+            "tasks_updated": tasks_updated,
         })
         logger.info(
-            f"[Step4] LLM RESPONSE ({time.time() - llm_start:.2f}s):\n"
-            f"  ai_context={result.ai_context!r}\n"
-            f"  content_len={len(result.content)}\n"
-            f"  content_preview={result.content[:200]!r}..."
+            f"[Step4] LLM RESPONSE ({time.time() - llm_start:.2f}s): "
+            f"content_len={len(result.content)}"
         )
 
         await self._memory_repo.upsert_by_workspace(workspace_id, result.content)
@@ -688,6 +725,88 @@ class WorkingMemoryService:
     # ------------------------------------------------------------------
     # ヘルパー
     # ------------------------------------------------------------------
+
+    async def _resolve_assignees(
+        self, workspace_id: int, source_type: Optional[str], source_id: Optional[int]
+    ) -> List[Dict[str, Any]]:
+        """タスクのアサイニーを解決する。
+
+        - パーソナルWS: ワークスペースの唯一のメンバーを自動アサイン
+        - グループWS: workspace_member_note の assignee を取得。なければ空リスト
+        """
+        ws = await self._workspace_repo.find_by_id(workspace_id)
+
+        if ws and ws.type == "personal":
+            members = await self._workspace_member_repo.find_by_workspace(workspace_id)
+            raw = [{"workspace_member_id": m.id} for m in members]
+        else:
+            if source_type == "note" and source_id:
+                pairs = await self._note_repo.get_note_assignee_user_and_member_ids(source_id)
+                raw = [{"workspace_member_id": mid} for _, mid in pairs]
+            else:
+                raw = []
+
+        if raw:
+            names = await self._fetch_member_names([a["workspace_member_id"] for a in raw])
+            for a in raw:
+                a["name"] = names.get(a["workspace_member_id"], "")
+
+        return raw
+
+    async def _fetch_member_names(self, member_ids: List[int]) -> Dict[int, str]:
+        """workspace_member ID リストから名前を取得する。"""
+        if not member_ids:
+            return {}
+        response = (
+            supabase.table("workspace_member")
+            .select("id, user_profiles:user_id(name)")
+            .in_("id", member_ids)
+            .execute()
+        )
+        return {
+            row["id"]: (row.get("user_profiles") or {}).get("name", "")
+            for row in (response.data or [])
+        }
+
+    async def _fetch_reactions_info(self, task_ids: List[int]) -> tuple[str, int]:
+        """タスクIDリストに紐づく通知のリアクション履歴を取得してフォーマットする。
+
+        Returns:
+            (reactions_info_text, reaction_count)
+        """
+        if not task_ids:
+            return "None", 0
+
+        response = (
+            supabase.table("ai_notifications")
+            .select("id, task_id, title, reaction_text, reaction_choices, reacted_at")
+            .in_("task_id", task_ids)
+            .not_.is_("reacted_at", "null")
+            .order("reacted_at", desc=True)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return "None", 0
+
+        parts = []
+        for row in rows:
+            task_id = row["task_id"]
+            title = row.get("title", "")
+            reaction_text = row.get("reaction_text")
+            reacted_at = row.get("reacted_at", "")
+
+            if reaction_text:
+                reaction_desc = f'ユーザーの反応: "{reaction_text}"'
+            else:
+                reaction_desc = "反応なし（無視された）"
+
+            parts.append(
+                f"Task #{task_id} の通知 \"{title}\" (reacted_at={reacted_at}):\n"
+                f"  → {reaction_desc}"
+            )
+
+        return "\n\n".join(parts), len(rows)
 
     async def get_memory(self, workspace_id: int) -> Optional[WorkingMemory]:
         """Workspace の working_memory を取得する。"""

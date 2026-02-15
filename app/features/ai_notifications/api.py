@@ -143,7 +143,7 @@ async def get_reacted_notifications_by_workspace(
     db: AsyncSession = Depends(get_db)
 ) -> List[ReactedAINotification]:
     """
-    Get all AI notifications that have been reacted on (reaction_status != 'None') for a workspace.
+    Get all AI notifications that have been reacted on (reaction_text IS NOT NULL) for a workspace.
     
     Returns notifications with:
     - Note information (id and title)

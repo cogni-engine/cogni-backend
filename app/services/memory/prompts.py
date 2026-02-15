@@ -5,25 +5,30 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 # ------------------------------------------------------------------
-# Step 1: workspace内の全ノート差分からタスクを解決
+# Step 1: ソース更新からタスクを解決（ソース非依存）
 # ------------------------------------------------------------------
 
 task_resolve_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are a task management assistant for a workspace. "
-        "You receive multiple note updates from the same workspace at once, "
-        "along with existing tasks linked to those notes. "
+        "You receive source updates (notes, calendar events, etc.) from the same workspace at once, "
+        "along with existing tasks linked to those sources. "
         "Your job is to:\n"
-        "1. UPDATE existing tasks: integrate new note information into their descriptions\n"
-        "2. CREATE new tasks: for notes that have no linked tasks yet\n\n"
+        "1. UPDATE existing tasks: integrate new source information into their descriptions\n"
+        "2. CREATE new tasks: for sources that have no linked tasks yet\n\n"
         "Rules:\n"
         "- Preserve ALL existing information in task descriptions — never lose data\n"
-        "- Each note update is independent — match updates to the correct tasks by note_id\n"
+        "- Each source update is independent — match updates to the correct tasks by source_type + source_id\n"
         "- For updates: only set title if it truly needs changing (otherwise null)\n"
-        "- For creates: title max 50 chars, description structured and comprehensive\n"
+        "- For creates:\n"
+        "  - source_type and source_id: copy EXACTLY from the sources listed in sources_without_tasks\n"
+        "  - Title: derive from both the source title AND content. "
+        "Do NOT just copy the source title. "
+        "Summarize what needs to be done in a clear, actionable phrase (max 50 chars).\n"
+        "  - Description: structured summary of the source content, not a full copy\n"
         "- ONLY use task_ids from the provided existing tasks\n"
-        "- ONLY use note_ids from the provided note updates\n"
+        "- ONLY create tasks for sources listed in sources_without_tasks\n"
         "- Respond in the SAME LANGUAGE as the input content",
     ),
     (
@@ -31,17 +36,26 @@ task_resolve_prompt = ChatPromptTemplate.from_messages([
         "Current datetime: {current_datetime}\n"
         "Working Memory (workspace context):\n{working_memory_content}\n\n"
         "---\n\n"
-        "Note Updates ({note_count} notes):\n{notes_info}\n\n"
+        "Source Updates ({source_count} sources):\n{sources_info}\n\n"
         "---\n\n"
-        "Existing Tasks linked to these notes ({task_count} tasks):\n{tasks_info}\n\n"
+        "Existing Tasks linked to these sources ({task_count} tasks):\n{tasks_info}\n\n"
         "---\n\n"
-        "Notes with NO existing tasks (need new tasks): {orphan_note_ids}\n\n"
+        "Sources with NO existing tasks (need new tasks):\n{sources_without_tasks}\n\n"
+        "---\n\n"
+        "Notification Reactions ({reaction_count} reactions):\n{reactions_info}\n\n"
         "---\n\n"
         "Instructions:\n"
-        "- For each existing task, decide how to integrate the new note information\n"
-        "- For each orphan note, create a new task\n"
-        "- Match information to tasks by their source_note_id\n"
-        "- Respond in the same language as the content",
+        "- For each existing task, decide how to integrate the new source information\n"
+        "- For each source without tasks, create a new task\n"
+        "- Match information to tasks by their source_type + source_id\n"
+        "- Respond in the same language as the content\n\n"
+        "Reaction handling:\n"
+        "- Append a '## リアクション履歴' section at the end of the task description\n"
+        "- Format each reaction as: '[datetime] 通知「title」→ response'\n"
+        "- If reaction_text is present: user responded (e.g. '途中まで完了')\n"
+        "- If reaction_text is absent: user ignored the notification\n"
+        "- NEVER remove existing reaction history — always append new entries\n"
+        "- Use reactions to inform task status (e.g. if user says '全部終わった', task may be done)",
     ),
 ])
 
@@ -53,30 +67,65 @@ task_notification_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are a notification scheduler for a task management app. "
-        "You generate helpful, well-timed notifications for tasks. "
-        "Rules:\n"
-        "- Each notification should be actionable and specific\n"
-        "- Use the working memory context to make notifications more relevant\n"
+        "You generate helpful, well-timed notifications for tasks.\n\n"
+        "CRITICAL TIMING RULES:\n"
+        "- current_datetime is in JST (Asia/Tokyo). ALL times you output must also be in JST.\n"
+        "- due_date MUST be strictly AFTER current_datetime. Never schedule in the past.\n"
+        "- NEVER schedule between 23:00-07:00 JST. If the ideal time falls in this range, "
+        "move it to 07:00-08:00 the next morning.\n"
+        "- Minimum due_date: current_datetime + 5 minutes\n\n"
+        "CONTENT RULES:\n"
         "- ONLY use task_ids from the provided tasks list\n"
         "- Respond in the SAME LANGUAGE as the task content\n"
-        "- Title: max 15 characters\n"
-        "- Body: 50-80 characters, specific and practical",
+        "- Title: clear and concise, convey content at a glance (max 20 chars)\n"
+        "- Body: 50-80 characters, specific and practical\n\n"
+        "REACTION RULES:\n"
+        "- reaction_choices determines how the user can respond:\n"
+        "  - null: informational only, no response expected (reminders, alerts, FYI)\n"
+        "  - []: free text response (progress reports, status updates, open-ended check-ins)\n"
+        "  - ['choice1','choice2',...]: pick one of 3-4 concrete options "
+        "(decision points, completion checks)\n"
+        "  Same language as the task.\n\n"
+        "REACTION HISTORY RULES (CRITICAL):\n"
+        "- Task descriptions may contain a 'リアクション履歴' section showing past notification reactions.\n"
+        "- You MUST read this history and adjust your notification strategy accordingly:\n"
+        "  - Postponed ('後回し', 'あとで', 'まだやってない'): "
+        "schedule the next notification 1-2 weeks later. Do NOT re-notify sooner.\n"
+        "  - Started ('着手した', '途中まで'): "
+        "schedule a gentle follow-up 3-6 hours later.\n"
+        "  - Ignored (反応なし): reduce frequency. "
+        "If ignored multiple times, generate 0 notifications for that task.\n"
+        "  - Completed ('全部終わった', '完了'): "
+        "generate 0 notifications for that task.\n"
+        "- If a task has been repeatedly postponed or ignored, "
+        "it is LOW priority — generate 0 notifications or schedule far in the future (next day+).\n"
+        "- NEVER generate a notification with the same content as one the user just reacted to.\n\n"
+        "REACTED_AT RULES:\n"
+        "- reacted_at = when to check if the user responded. Set relative to due_date.\n"
+        "- If reaction_choices is null → reacted_at MUST be null\n"
+        "- If reaction_choices is [] or has items → reacted_at = due_date + buffer:\n"
+        "  - Urgent tasks (deadline today/tomorrow): + 30 minutes\n"
+        "  - Normal tasks: + 1 hour\n"
+        "  - Low priority / long-term tasks: + 2 hours\n"
+        "- reacted_at must also respect the 23:00-07:00 quiet window",
     ),
     (
         "human",
-        "Current datetime: {current_datetime}\n"
+        "Current datetime (JST): {current_datetime}\n"
         "Working Memory (context):\n{working_memory_content}\n\n"
         "---\n\n"
         "Tasks ({task_count} tasks):\n{tasks_info}\n\n"
         "---\n\n"
-        "Guidelines:\n"
-        "- Generate 1-3 notifications per task (total 1-5 notifications)\n"
-        "- Each notification must include the corresponding task_id\n"
-        "- First notification: 5 minutes to 2 hours from now\n"
+        "Generate 1-3 notifications per task (total 1-5).\n"
+        "- First notification: within 5 min to 2 hours from now\n"
         "- Spacing: at least 2-4 hours between notifications for the same task\n"
         "- If a task has a deadline, schedule a final reminder before it\n"
-        "- Use working memory context to make notifications specific and helpful\n"
-        "- Respond in the same language as the tasks",
+        "- Use working memory context to make notifications specific and helpful\n\n"
+        "Examples:\n"
+        "  'Did you finish X?' → reaction_choices: ['全部終わった','途中まで','今日はできなかった'], "
+        "reacted_at: due_date + 30min-1h\n"
+        "  'How is X going?' → reaction_choices: [], reacted_at: due_date + 1h\n"
+        "  'Don't forget X at 3pm' → reaction_choices: null, reacted_at: null",
     ),
 ])
 
@@ -90,9 +139,12 @@ notification_optimize_prompt = ChatPromptTemplate.from_messages([
         "You are a notification optimizer. "
         "You review scheduled notifications and can: delete, merge, or update them. "
         "Rules:\n"
+        "- NEVER merge or delete notifications with DIFFERENT WorkspaceMemberID values. "
+        "Each WorkspaceMemberID represents a different person — they each need their own notification.\n"
         "- DELETE: Remove notifications that are outdated, irrelevant, or completely redundant\n"
-        "- MERGE: Combine similar notifications (same task, overlapping content, close timing) "
-        "into one better notification. Set notification_id to the one to keep, "
+        "- MERGE: Combine similar notifications ONLY when they share the same WorkspaceMemberID "
+        "AND same task with overlapping content or close timing. "
+        "Set notification_id to the one to keep, "
         "absorb_ids to the ones to delete after merging their content\n"
         "- UPDATE: Improve a notification's content without merging (set absorb_ids to empty). "
         "Use this when the content is outdated but the notification itself is still needed\n"

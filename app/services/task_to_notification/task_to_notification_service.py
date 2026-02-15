@@ -1,11 +1,12 @@
 """Task to Notification AI service with LangChain"""
-from typing import List
+from typing import List, Dict
 import logging
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import supabase
 from app.infra.supabase.repositories.notifications import AINotificationRepository
+from app.infra.supabase.repositories.notes import NoteRepository
 from app.models.task import Task
 from app.models.notification import AINotification, AINotificationCreate, NotificationStatus
 from app.utils.datetime_helper import get_current_datetime_ja
@@ -49,8 +50,6 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
     task_description = task.description or "説明なし"
     task_deadline = task.deadline.isoformat() if task.deadline else "期限なし"
     task_status = task.status or "未設定"
-    task_progress = task.progress if task.progress is not None else 0
-    
     # 現在の日時を取得（日本時間）
     current_datetime = get_current_datetime_ja()
     
@@ -62,7 +61,6 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
         "task_description": task_description,
         "task_deadline": task_deadline,
         "task_status": task_status,
-        "task_progress": task_progress,
     })
     
     logger.info(f"AI generated {len(result.notifications)} notifications")
@@ -72,35 +70,37 @@ async def generate_notifications_from_task(task: Task) -> List[AINotification]:
         logger.info(f"No notifications generated for task {task.id}")
         return []
     
-    # NotificationCreateモデルに変換
-    notifications_to_create = []
+    # assignee取得
+    assignees = []
+    if task.source_note_id:
+        note_repo = NoteRepository(supabase)
+        assignees = await note_repo.get_note_assignee_user_and_member_ids(task.source_note_id)
+    if not assignees:
+        logger.warning(f"No assignees found for task {task.id}, skipping notification creation")
+        return []
+
+    # NotificationCreateモデルに変換（assigneeごとに展開）
+    saved_notifications: List[AINotification] = []
+
     for notif in result.notifications:
-        notifications_to_create.append(
-            AINotificationCreate(
+        for _user_id, workspace_member_id in assignees:
+            notification_create = AINotificationCreate(
                 title=notif.title,
-                ai_context=notif.ai_context,
                 body=notif.body,
                 due_date=notif.due_date,
                 task_id=task.id,
-                user_id=task.user_id,
-                workspace_member_id=task.workspace_member_id,
+                workspace_id=task.workspace_id,
+                workspace_member_id=workspace_member_id,
                 status=NotificationStatus.SCHEDULED
             )
-        )
-    
-    # AINotificationRepositoryで通知を保存（既に上で初期化済み）
-    saved_notifications: List[AINotification] = []
-    
-    for notification_create in notifications_to_create:
-        try:
-            saved_notification = await notification_repo.create(notification_create)
-            saved_notifications.append(saved_notification)
-            logger.info(f"Notification saved successfully: {saved_notification.id} - {saved_notification.title}")
-        except Exception as e:
-            logger.error(f"Failed to save notification: {notification_create.title}. Error: {e}")
-            # 失敗した通知はスキップして続行
-            continue
-    
+            try:
+                saved_notification = await notification_repo.create(notification_create)
+                saved_notifications.append(saved_notification)
+                logger.info(f"Notification saved successfully: {saved_notification.id} - {saved_notification.title} (wm: {workspace_member_id})")
+            except Exception as e:
+                logger.error(f"Failed to save notification: {notification_create.title}. Error: {e}")
+                continue
+
     return saved_notifications
 
 
@@ -140,8 +140,7 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
 タイトル: {task.title}
 説明: {task.description or "説明なし"}
 期限: {task.deadline.isoformat() if task.deadline else "期限なし"}
-ステータス: {task.status or "未設定"}
-進捗: {task.progress if task.progress is not None else 0}%"""
+ステータス: {task.status or "未設定"}"""
         tasks_info.append(task_info)
     
     combined_tasks_info = "\n\n---\n\n".join(tasks_info)
@@ -161,39 +160,40 @@ async def generate_notifications_from_tasks_batch(tasks: List[Task]) -> List[AIN
         logger.info("No notifications generated for task batch")
         return []
     
-    # 通知を保存（各タスクのuser_idごとに保存）
+    # assigneeをタスクのsource_note_idから取得してキャッシュ
+    note_repo = NoteRepository(supabase)
+    assignee_cache: Dict[int, list] = {}
+    for task in tasks:
+        if task.source_note_id and task.source_note_id not in assignee_cache:
+            assignee_cache[task.source_note_id] = await note_repo.get_note_assignee_user_and_member_ids(task.source_note_id)
+
     saved_notifications: List[AINotification] = []
-    
-    # 各タスクのuser_idを取得（重複を除く）
-    user_ids = list(set(task.user_id for task in tasks))
-    
+
     for notif in result.notifications:
-        # 各ユーザーごとに通知を保存
-        for user_id in user_ids:
-            # そのユーザーのタスクを取得
-            user_tasks = [t for t in tasks if t.user_id == user_id]
-            if not user_tasks:
-                continue
-            
-            # 最初のタスクに紐づける
-            primary_task = user_tasks[0]
-        
+        # 最初のタスクに紐づける
+        primary_task = tasks[0]
+
+        assignees = assignee_cache.get(primary_task.source_note_id, []) if primary_task.source_note_id else []
+        if not assignees:
+            logger.warning(f"No assignees for task {primary_task.id}, skipping notification")
+            continue
+
+        for _user_id, workspace_member_id in assignees:
             try:
                 notification_create = AINotificationCreate(
                     title=notif.title,
-                    ai_context=notif.ai_context,
                     body=notif.body,
                     due_date=notif.due_date,
                     task_id=primary_task.id,
-                    user_id=user_id,
-                    workspace_member_id=primary_task.workspace_member_id,
+                    workspace_id=primary_task.workspace_id,
+                    workspace_member_id=workspace_member_id,
                     status=NotificationStatus.SCHEDULED
                 )
                 saved_notification = await notification_repo.create(notification_create)
                 saved_notifications.append(saved_notification)
-                logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, user {user_id})")
+                logger.info(f"Notification saved: {saved_notification.id} (task {primary_task.id}, wm {workspace_member_id})")
             except Exception as e:
-                logger.error(f"Failed to save notification for user {user_id}: {e}")
+                logger.error(f"Failed to save notification for wm {workspace_member_id}: {e}")
                 continue
-    
+
     return saved_notifications

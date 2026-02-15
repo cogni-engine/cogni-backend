@@ -1,10 +1,9 @@
 """Domain models for AI Notifications feature"""
 
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
 from enum import Enum
 from typing import Optional
 from datetime import datetime
-from uuid import UUID
 
 
 class NotificationStatus(str, Enum):
@@ -12,14 +11,6 @@ class NotificationStatus(str, Enum):
     SCHEDULED = "scheduled"
     SENT = "sent"
     RESOLVED = "resolved"
-
-
-class ReactionStatus(str, Enum):
-    """Reaction status enum for user reactions to notifications"""
-    NONE = "None"
-    COMPLETED = "completed"
-    POSTPONED = "postponed"
-    DISMISSED = "dismissed"
 
 
 class TaskResult(BaseModel):
@@ -47,24 +38,17 @@ class NoteInfo(BaseModel):
 class AINotificationBase(BaseModel):
     """Base AI notification fields"""
     title: str
-    ai_context: str
     body: Optional[str] = None
     due_date: datetime
     task_id: int
-    task_result_id: Optional[int] = None
-    user_id: UUID | str  # Accept both UUID and string
+    workspace_id: int
     workspace_member_id: Optional[int] = None
     status: NotificationStatus = NotificationStatus.SCHEDULED
-    reaction_status: ReactionStatus = ReactionStatus.NONE
     reaction_text: Optional[str] = None
-    
-    @field_serializer('user_id')
-    def serialize_user_id(self, user_id: UUID | str) -> str:
-        """Serialize UUID to string for JSON"""
-        return str(user_id)
+    reaction_choices: Optional[list] = None
 
     def has_reaction(self) -> bool:
-        return self.reaction_status != ReactionStatus.NONE
+        return self.reaction_text is not None
 
     def can_be_actioned(self) -> bool:
         return self.status == NotificationStatus.SENT and not self.has_reaction()
@@ -78,7 +62,6 @@ class AINotificationCreate(AINotificationBase):
 class AINotificationUpdate(BaseModel):
     """AI notification update model - all fields optional"""
     title: Optional[str] = None
-    ai_context: Optional[str] = None
     body: Optional[str] = None
     due_date: Optional[datetime] = None
     status: Optional[NotificationStatus] = None
@@ -89,7 +72,7 @@ class AINotification(AINotificationBase):
     id: int
     created_at: datetime
     updated_at: datetime
-    task_result: Optional[TaskResult] = None  # Included if notification has a task_result_id
+    task_result: Optional[TaskResult] = None
     note: Optional[NoteInfo] = None  # Included if notification's task has a source_note_id
 
     class Config:

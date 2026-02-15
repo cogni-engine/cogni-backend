@@ -9,6 +9,7 @@ class WorkspaceType(str, Enum):
     """Workspace type enum"""
     GROUP = "group"
     PERSONAL = "personal"
+    DM = "dm"
 
 
 class WorkspaceRole(str, Enum):

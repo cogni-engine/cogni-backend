@@ -21,7 +21,6 @@ Task:
 - Description: {task_description}
 - Deadline: {task_deadline}
 - Status: {task_status}
-- Progress: {task_progress}%
 
 Guidelines:
 - Generate 1-3 notifications based on task complexity

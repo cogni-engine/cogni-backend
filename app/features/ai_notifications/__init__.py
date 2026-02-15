@@ -8,7 +8,6 @@ from app.features.ai_notifications.domain import (
     AINotificationCreate,
     AINotificationUpdate,
     NotificationStatus,
-    ReactionStatus,
     TaskResult,
 )
 from app.features.ai_notifications.schemas import (
@@ -29,7 +28,6 @@ __all__ = [
     "AINotificationCreate",
     "AINotificationUpdate",
     "NotificationStatus",
-    "ReactionStatus",
     "TaskResult",
     "CompleteNotificationRequest",
     "CompleteNotificationResponse",

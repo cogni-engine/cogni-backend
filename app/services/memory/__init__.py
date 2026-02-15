@@ -1,4 +1,4 @@
-"""Working memory event processing service"""
-from .working_memory_service import WorkingMemoryService
+"""Memory event processing service"""
+from .memory_service import MemoryService
 
-__all__ = ["WorkingMemoryService"]
+__all__ = ["MemoryService"]

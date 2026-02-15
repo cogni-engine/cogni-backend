@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
-from app.features.ai_notifications.domain import NotificationStatus, ReactionStatus, TaskResult
+from app.features.ai_notifications.domain import NotificationStatus
 
 
 class CompleteNotificationRequest(BaseModel):
@@ -54,22 +54,20 @@ class ReactedAINotification(BaseModel):
     """AI Notification with note and user information for reacted notifications"""
     id: int
     title: str
-    ai_context: str
     body: Optional[str] = None
     due_date: datetime
     task_id: int
-    user_id: str  # UUID as string
+    workspace_id: int
     workspace_member_id: Optional[int] = None
     status: NotificationStatus
-    reaction_status: ReactionStatus
     reaction_text: Optional[str] = None
+    reaction_choices: Optional[list] = None
     created_at: datetime
     updated_at: datetime
-    
+
     # Joined data
     note: Optional[NoteInfo] = None
     user: Optional[UserInfo] = None
-    task_result: Optional[TaskResult] = None
-    
+
     class Config:
         from_attributes = True

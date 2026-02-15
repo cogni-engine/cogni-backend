@@ -32,14 +32,14 @@ class NotificationAnalysisResponse(BaseModel):
 class AINotificationBase(BaseModel):
     """Base AI notification fields"""
     title: str
-    ai_context: str
     body: Optional[str] = None
     due_date: datetime
     task_id: int
-    task_result_id: Optional[int] = None
-    user_id: str  # UUID as string
+    workspace_id: int
     workspace_member_id: Optional[int] = None
     status: NotificationStatus = NotificationStatus.SCHEDULED
+    reaction_choices: Optional[List] = None
+    reacted_at: Optional[datetime] = None
 
 
 class AINotificationCreate(AINotificationBase):
@@ -50,7 +50,6 @@ class AINotificationCreate(AINotificationBase):
 class AINotificationUpdate(BaseModel):
     """AI notification update model - all fields optional"""
     title: Optional[str] = None
-    ai_context: Optional[str] = None
     body: Optional[str] = None
     due_date: Optional[datetime] = None
     status: Optional[NotificationStatus] = None

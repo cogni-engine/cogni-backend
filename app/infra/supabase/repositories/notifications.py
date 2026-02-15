@@ -19,9 +19,9 @@ class AINotificationRepository(BaseRepository[AINotification, AINotificationCrea
     def __init__(self, client: Client):
         super().__init__(client, "ai_notifications", AINotification)
     
-    async def find_by_user(self, user_id: str) -> List[AINotification]:
-        """Find all AI notifications for a user"""
-        return await self.find_by_filters({"user_id": user_id})
+    async def find_by_workspace(self, workspace_id: int) -> List[AINotification]:
+        """Find all AI notifications for a workspace"""
+        return await self.find_by_filters({"workspace_id": workspace_id})
     
     async def mark_sent(self, notification_id: int) -> AINotification | None:
         """Mark an AI notification as sent"""

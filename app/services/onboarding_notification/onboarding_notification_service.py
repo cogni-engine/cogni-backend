@@ -101,18 +101,16 @@ async def generate_tutorial_task_and_notification(
         next_run_time = current_datetime + timedelta(seconds=5)
 
         task_create = TaskCreate(
-            user_id=user_id,
             title=task_content["title"],
+            workspace_id=workspace_id,
             description=task_content["description"],
             recurrence_pattern=None,
             next_run_time=next_run_time,
             is_ai_task=True,
             status="pending",
             deadline=None,
-            progress=0,
             source_note_id=note_id,
             assigner_id=None,
-            workspace_member_id=boss_workspace_member_id,
         )
 
         task = await task_repo.create(task_create)
@@ -155,12 +153,10 @@ async def generate_tutorial_task_and_notification(
 
         notification_create = AINotificationCreate(
             title=notification_response.title,
-            ai_context=notification_response.ai_context,
             body=notification_response.body,
             due_date=due_date,
             task_id=task.id,
-            task_result_id=task_result.id,
-            user_id=user_id,
+            workspace_id=workspace_id,
             workspace_member_id=boss_workspace_member_id,
             status=NotificationStatus.SCHEDULED
         )

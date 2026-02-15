@@ -72,38 +72,32 @@ async def generate_tasks_from_note(
 
     print(f"🕐 result: {result}")
     # TaskRepositoryでタスクを保存
-    # 各タスク × 各(user_id, workspace_member_id)ペアで保存
+    # タスクはノートごとに1つ作成（user_idはタスクに持たない）
     saved_tasks: List[Task] = []
-    
+
     for task in result.tasks:
-        for user_id, workspace_member_id in user_workspace_member_pairs:
-            # タスクデータを取得
-            task_data = task.model_dump(exclude={'source_note_id'})
-            
-            # next_run_timeとdeadlineをJSTからUTCに変換
-            if task_data.get('next_run_time'):
-                original_next_run_time = task_data['next_run_time']
-                task_data['next_run_time'] = convert_jst_to_utc(original_next_run_time)
-                print(f"🕐 next_run_time変換: JST {original_next_run_time} → UTC {task_data['next_run_time']} (tzinfo: {task_data['next_run_time'].tzinfo})")
-            
-            if task_data.get('deadline'):
-                original_deadline = task_data['deadline']
-                task_data['deadline'] = convert_jst_to_utc(original_deadline)
-                print(f"🕐 deadline変換: JST {original_deadline} → UTC {task_data['deadline']} (tzinfo: {task_data['deadline'].tzinfo})")
-            
-            task_create = TaskCreate(
-                user_id=user_id,
-                workspace_member_id=workspace_member_id,
-                source_note_id=note_id,
-                **task_data
-            )
-            try:
-                saved_task = await task_repo.create(task_create)
-                saved_tasks.append(saved_task)
-                logger.info(f"Task saved successfully: {saved_task.id} - {saved_task.title} (user: {user_id}, workspace_member: {workspace_member_id})")
-            except Exception as e:
-                logger.error(f"Failed to save task: {task_create.title} for user {user_id}. Error: {e}")
-                # 失敗したタスクはスキップして続行
-                continue
-    
+        # タスクデータを取得
+        task_data = task.model_dump(exclude={'source_note_id'})
+
+        # next_run_timeとdeadlineをJSTからUTCに変換
+        if task_data.get('next_run_time'):
+            original_next_run_time = task_data['next_run_time']
+            task_data['next_run_time'] = convert_jst_to_utc(original_next_run_time)
+
+        if task_data.get('deadline'):
+            original_deadline = task_data['deadline']
+            task_data['deadline'] = convert_jst_to_utc(original_deadline)
+
+        task_create = TaskCreate(
+            source_note_id=note_id,
+            **task_data
+        )
+        try:
+            saved_task = await task_repo.create(task_create)
+            saved_tasks.append(saved_task)
+            logger.info(f"Task saved successfully: {saved_task.id} - {saved_task.title}")
+        except Exception as e:
+            logger.error(f"Failed to save task: {task_create.title}. Error: {e}")
+            continue
+
     return saved_tasks
