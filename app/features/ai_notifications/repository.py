@@ -113,10 +113,10 @@ class AINotificationRepository:
             tasks = result_tasks.scalars().all()
             tasks_dict = {t.id: t for t in tasks}
 
-        # Collect note_ids from tasks
+        # Collect note_ids from tasks (source_type='note' means source_id is a note ID)
         note_ids = {
-            t.source_note_id for t in tasks_dict.values()
-            if t.source_note_id is not None
+            t.source_id for t in tasks_dict.values()
+            if t.source_type == 'note' and t.source_id is not None
         }
 
         # Batch fetch notes - OPTIMIZED: Only select id and title
@@ -133,10 +133,10 @@ class AINotificationRepository:
             # Get task for this notification
             task = tasks_dict.get(orm_notification.task_id)
 
-            # Get note info if task has source_note_id
+            # Get note info if task has source_type='note'
             note_info = None
-            if task and task.source_note_id:
-                note_row = notes_dict.get(task.source_note_id)
+            if task and task.source_type == 'note' and task.source_id:
+                note_row = notes_dict.get(task.source_id)
                 if note_row:
                     note_info = DomainNoteInfo(
                         id=int(note_row.id),
@@ -418,9 +418,9 @@ class AINotificationRepository:
                 return []
 
             note_ids = {
-                getattr(task, 'source_note_id', None)
+                task.source_id
                 for _, task in results
-                if task and getattr(task, 'source_note_id', None) is not None
+                if task and task.source_type == 'note' and task.source_id is not None
             }
             workspace_member_ids_to_fetch = {
                 getattr(result, 'workspace_member_id', None)
@@ -495,7 +495,7 @@ class AINotificationRepository:
                     # Get note info
                     note_info = None
                     if task:
-                        source_note_id = getattr(task, 'source_note_id', None)
+                        source_note_id = task.source_id if task.source_type == 'note' else None
                         if source_note_id:
                             note_row = notes_dict.get(source_note_id)
                             if note_row:

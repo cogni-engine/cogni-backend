@@ -20,15 +20,15 @@ class TaskResult(Base):
     
     # Foreign key to tasks table
     task_id = Column(
-        Integer, 
+        Integer,
         ForeignKey("tasks.id", ondelete="CASCADE"),
-        nullable=False, 
+        nullable=True,
         index=True
     )
-    
+
     # Result information
-    result_title = Column(String, nullable=False)
-    result_text = Column(Text, nullable=False)
+    result_title = Column(String, nullable=True)
+    result_text = Column(Text, nullable=True)
     
     # Execution timestamp
     executed_at = Column(DateTime(timezone=True), nullable=False)

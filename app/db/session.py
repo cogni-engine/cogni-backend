@@ -173,6 +173,14 @@ def on_connect(dbapi_conn, connection_record):
 
 
 @event.listens_for(engine.sync_engine, "checkout")
+def on_checkout_set_search_path(dbapi_conn, connection_record, connection_proxy):
+    """Set search_path on every checkout (pgBouncer transaction mode resets it)"""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("SET search_path TO public, cognition")
+    cursor.close()
+
+
+@event.listens_for(engine.sync_engine, "checkout")
 def on_checkout(dbapi_conn, connection_record, connection_proxy):
     """Log when a connection is checked out from the pool"""
     stats = get_pool_stats()

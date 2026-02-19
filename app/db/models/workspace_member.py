@@ -25,18 +25,15 @@ class WorkspaceMember(Base):
     
     # Member information
     role = Column(String, nullable=False, default="member")
-    
+    last_read_message_id = Column(Integer, nullable=True)
+
     # Timestamps
     created_at = Column(
-        DateTime(timezone=True), 
-        server_default=func.now(), 
+        DateTime(timezone=True),
+        server_default=func.now(),
         nullable=False
     )
-    
-    # Relationships
-    # Note: user_id references auth.users.id, and user_profiles.id also references auth.users.id
-    # Since there's no direct FK, we'll query UserProfile manually in the repository
-    # user_profile relationship is not defined here to avoid FK constraint issues
+    removed_at = Column(DateTime(timezone=True), nullable=True)
     
     def __repr__(self) -> str:
         return f"<WorkspaceMember(id={self.id}, user_id={self.user_id}, workspace_id={self.workspace_id})>"
