@@ -1,6 +1,6 @@
 """StartTimer Tool - starts a timer for the user."""
 from datetime import datetime, timedelta
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from pydantic import BaseModel, Field
 from app.services.tools.base import BaseTool, ToolResult
 
@@ -29,7 +29,7 @@ class StartTimerTool(BaseTool):
     def args_schema(self) -> Type[BaseModel]:
         return StartTimerArgs
 
-    async def execute(self, args: Dict[str, Any]) -> ToolResult:
+    async def execute(self, args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> ToolResult:
         duration = args["duration_seconds"]
         started_at = datetime.utcnow()
         ends_at = started_at + timedelta(seconds=duration)

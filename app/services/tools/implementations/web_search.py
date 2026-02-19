@@ -1,6 +1,6 @@
 """WebSearch Tool - searches the web via OpenAI Responses API."""
 import logging
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from app.services.tools.base import BaseTool, ToolResult
@@ -31,7 +31,7 @@ class WebSearchTool(BaseTool):
     def args_schema(self) -> Type[BaseModel]:
         return WebSearchArgs
 
-    async def execute(self, args: Dict[str, Any]) -> ToolResult:
+    async def execute(self, args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> ToolResult:
         query = args["query"]
         logger.info(f"WebSearch executing: {query}")
 

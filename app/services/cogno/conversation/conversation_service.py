@@ -38,6 +38,7 @@ async def _run_tool_loop(
     messages: List[Dict[str, Any]],
     bind_tools_list: List,
     executor: ToolExecutor,
+    tool_context: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Tuple[str, str, Dict[str, Any]], None]:
     """
     Tool Use Loop: stream LLM → detect tool_calls → execute → feed back → repeat.
@@ -80,7 +81,7 @@ async def _run_tool_loop(
         # Execute tools
         tool_names = [tc["name"] for tc in tool_calls_detected]
         logger.info(f"[ToolLoop] round={round_num} tools={tool_names}")
-        results = await executor.execute_tool_calls(tool_calls_detected)
+        results = await executor.execute_tool_calls(tool_calls_detected, context=tool_context)
 
         # Collect meta + build feedback for next round
         tool_result_parts = []
@@ -123,6 +124,7 @@ async def conversation_stream(
     task_list_for_suggestion: Optional[List[Dict]] = None,
     all_user_tasks: Optional[List[Task]] = None,
     message_history: Optional[Sequence[MessageLike]] = None,
+    current_user_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream conversation AI response with Tool Use Loop."""
     supabase_client = get_supabase_client()
@@ -174,8 +176,10 @@ async def conversation_stream(
             bind_tools_list = tool_registry.get_bind_tools_list()
             executor = ToolExecutor(tool_registry)
 
+            tool_context = {"user_id": current_user_id} if current_user_id else None
+
             async for chunk, kind, meta in _run_tool_loop(
-                llm_service, messages, bind_tools_list, executor
+                llm_service, messages, bind_tools_list, executor, tool_context=tool_context
             ):
                 if kind == "CHUNK":
                     yield chunk

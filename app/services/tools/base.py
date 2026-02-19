@@ -36,5 +36,10 @@ class BaseTool(ABC):
         """Pydantic model. Argument definition passed to bind_tools()."""
 
     @abstractmethod
-    async def execute(self, args: Dict[str, Any]) -> ToolResult:
-        """Execute the tool and return result"""
+    async def execute(self, args: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> ToolResult:
+        """Execute the tool and return result.
+
+        Args:
+            args: Tool arguments from LLM
+            context: Request-scoped context (user_id, etc.)
+        """

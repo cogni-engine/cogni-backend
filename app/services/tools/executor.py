@@ -1,6 +1,6 @@
 """Tool Executor - dispatches tool_calls to corresponding Tool.execute()."""
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from .base import ToolResult
 from .registry import ToolRegistry
 
@@ -13,7 +13,9 @@ class ToolExecutor:
     def __init__(self, registry: ToolRegistry):
         self._registry = registry
 
-    async def execute_tool_calls(self, tool_calls: List[Dict]) -> List[ToolResult]:
+    async def execute_tool_calls(
+        self, tool_calls: List[Dict], context: Optional[Dict] = None
+    ) -> List[ToolResult]:
         """Execute custom tools only. Builtins (web_search etc.) are skipped."""
         results = []
         for tc in tool_calls:
@@ -22,7 +24,7 @@ class ToolExecutor:
             tool = self._registry.get_tool(name)
             if tool:
                 try:
-                    result = await tool.execute(args)
+                    result = await tool.execute(args, context=context)
                     results.append(result)
                     logger.info(f"Tool executed: {name}, success={result.success}")
                 except Exception as e:

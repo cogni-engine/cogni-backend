@@ -61,7 +61,8 @@ async def stream_conversation(
                     user_message=None,
                     notification_triggered=True,
                     notification_context=notification,
-                    is_ai_initiated=True
+                    is_ai_initiated=True,
+                    current_user_id=current_user_id,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -81,7 +82,8 @@ async def stream_conversation(
                 thread_id=request.thread_id,
                 user_message=None,
                 timer_completed=True,
-                is_ai_initiated=True
+                is_ai_initiated=True,
+                current_user_id=current_user_id,
             ),
             media_type="text/event-stream",
             headers={
@@ -123,6 +125,7 @@ async def stream_conversation(
             task_list_for_suggestion=task_list_for_suggestion,
             all_user_tasks=pending_tasks,
             message_history=request.messages,
+            current_user_id=current_user_id,
         ),
         media_type="text/event-stream",
         headers={
