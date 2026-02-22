@@ -13,6 +13,7 @@ from fastapi import FastAPI, APIRouter  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from app.api import cogno, notes, tasks, webhooks, push_notifications, users, note_ai_editor, onboarding, organizations, memory  # noqa: E402
 from app.features import ai_notifications, billing  # noqa: E402
+from app.services.tools.implementations import register_all_tools  # noqa: E402
 
 app = FastAPI(
     title="Cogni Backend API",
@@ -84,6 +85,9 @@ api_router.include_router(billing.router)
 
 # Include all API routes
 app.include_router(api_router)
+
+# Register all tools at startup
+register_all_tools()
 
 
 @app.get("/")

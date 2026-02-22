@@ -1,7 +1,6 @@
-"""Cogni Engine Service - Makes decisions about task focus and timer activation"""
+"""Cogni Engine Service - Makes decisions about task focus"""
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Protocol
 from collections.abc import Sequence
@@ -25,17 +24,11 @@ class MessageLike(Protocol):
 
 async def make_engine_decision(current_user_id: str, messages: Sequence[MessageLike]) -> tuple[EngineDecision, List[Task]]:
     """
-    Analyze chat history and tasks to make decisions:
-    1. Which task to focus on
-    2. Whether to start a timer
-    3. Which task to complete
-    
-    Args:
-        thread_id: Thread ID to analyze
-        current_user_message: Current user message to include in analysis
-        
+    Analyze chat history and tasks to decide which task to focus on.
+    Timer and task completion are now handled by Tool calling.
+
     Returns:
-        Tuple of (EngineDecision, pending_tasks_list)
+        Tuple of (EngineDecision, relevant_tasks_list)
     """
     supabase_client = get_supabase_client()
     
@@ -100,7 +93,7 @@ async def make_engine_decision(current_user_id: str, messages: Sequence[MessageL
         
     except Exception as e:
         logger.error(f"Error making engine decision: {e}")
-        return EngineDecision(focused_task_id=None, should_start_timer=False, task_to_complete_id=None), []
+        return EngineDecision(focused_task_id=None), []
 
 
 def _convert_messages_to_dict(messages: Sequence[MessageLike]) -> List[Dict[str, str]]:
@@ -139,10 +132,10 @@ def _convert_tasks_to_simple_dict(tasks: List[Task]) -> List[Dict[str, Any]]:
 
 
 async def _call_llm_for_decision(
-    chat_history: List[Dict[str, str]], 
+    chat_history: List[Dict[str, str]],
     task_list: List[Dict[str, Any]]
 ) -> EngineDecision:
-    """Call LLM to make engine decision (focus + timer)"""
+    """Call LLM to make engine decision (focused_task_id only)"""
 
     current_datetime = datetime.now(timezone.utc).isoformat()
     messages = [
@@ -159,65 +152,10 @@ async def _call_llm_for_decision(
         logger.info(f"Calling LLM with {len(chat_history)} messages and {len(task_list)} tasks")
         llm_service = LLMService(model="gemini-2.5-flash-lite", temperature=0.3)
         decision = await llm_service.structured_invoke(messages, EngineDecision)
-        logger.info(f"Engine decision: focused_task_id={decision.focused_task_id}, should_start_timer={decision.should_start_timer}")
+        logger.info(f"Engine decision: focused_task_id={decision.focused_task_id}")
         return decision
     except Exception as e:
         logger.error(f"Error calling LLM for engine decision: {e}")
         logger.error(f"Messages sent to LLM: {messages}")
-        return EngineDecision(focused_task_id=None, should_start_timer=False, task_to_complete_id=None)
-
-
-def extract_timer_duration(message: str) -> Optional[int]:
-    """
-    Extract timer duration from user message.
-    
-    Args:
-        message: User message to extract duration from
-        
-    Returns:
-        Duration in seconds (int), or None if no time pattern found
-        
-    Examples:
-        "30分集中します" -> 1800 (秒)
-        "1時間作業する" -> 3600 (秒)
-        "30秒テスト" -> 30 (秒)
-        "30" -> 1800 (秒、分として扱う)
-        "1:30:45" -> 5445 (秒、時間:分:秒形式)
-        "1:30" -> 5400 (秒、時間:分形式)
-    """
-    # 時間:分:秒形式 (例: "1:30:45" = 1時間30分45秒)
-    time_pattern = r'(\d+):(\d+):(\d+)'
-    time_match = re.search(time_pattern, message)
-    if time_match:
-        hours, minutes, seconds = map(int, time_match.groups())
-        return hours * 3600 + minutes * 60 + seconds
-    
-    # 時間:分形式 (例: "1:30" = 1時間30分)
-    hour_min_pattern = r'(\d+):(\d+)'
-    hour_min_match = re.search(hour_min_pattern, message)
-    if hour_min_match:
-        hours, minutes = map(int, hour_min_match.groups())
-        return hours * 3600 + minutes * 60
-    
-    # 正規表現で時間を検出: 数字 + (秒|分|時間|sec|min|hour) または 数字のみ
-    time_match = re.search(r'(\d+)\s*(秒|分|時間|sec|min|hour)', message, re.IGNORECASE)
-    
-    if time_match:
-        value = int(time_match.group(1))
-        unit = time_match.group(2).lower()
-        
-        # 単位に応じて秒単位で返す
-        if unit in ['時間', 'hour']:
-            return value * 3600  # 秒単位
-        elif unit in ['秒', 'sec']:
-            return value  # 秒単位
-        else:  # 分|min
-            return value * 60  # 秒単位
-    
-    # 数字のみの場合（分として扱う）
-    number_match = re.search(r'^(\d+)$', message.strip())
-    if number_match:
-        return int(number_match.group(1)) * 60  # 分を秒に変換
-    
-    return None
+        return EngineDecision(focused_task_id=None)
 
