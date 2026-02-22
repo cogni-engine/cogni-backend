@@ -1,11 +1,17 @@
-"""WebSearch Tool - searches the web via OpenAI Responses API."""
+"""WebSearch Tool - searches the web via Gemini Google Search grounding."""
 import logging
 from typing import Dict, Any, Type, Optional
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 from app.services.tools.base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# Gemini client (uses GOOGLE_API_KEY env var by default)
+_client = genai.Client()
+
+SEARCH_MODEL = "gemini-2.5-flash"
 
 
 class WebSearchArgs(BaseModel):
@@ -14,7 +20,7 @@ class WebSearchArgs(BaseModel):
 
 
 class WebSearchTool(BaseTool):
-    """Web search via OpenAI Responses API. Called as a custom tool by Gemini."""
+    """Web search via Gemini Google Search grounding."""
 
     @property
     def name(self) -> str:
@@ -36,28 +42,43 @@ class WebSearchTool(BaseTool):
         logger.info(f"WebSearch executing: {query}")
 
         try:
-            client = AsyncOpenAI()
-            response = await client.responses.create(
-                model="gpt-4.1-mini",
-                tools=[{"type": "web_search_preview"}],
-                input=query,
+            response = await _client.aio.models.generate_content(
+                model=SEARCH_MODEL,
+                contents=query,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())]
+                ),
             )
 
-            # Extract text from response output
-            text_parts = []
-            for item in response.output:
-                if item.type == "message":
-                    for block in item.content:
-                        if hasattr(block, "text"):
-                            text_parts.append(block.text)
+            result_text = response.text if response.text else "検索結果が見つかりませんでした。"
+            logger.info(f"WebSearch result text: {result_text}")
 
-            result_text = "\n".join(text_parts) if text_parts else "検索結果が見つかりませんでした。"
-            logger.info(f"WebSearch result length: {len(result_text)} chars")
+            # Debug: log full grounding metadata
+            try:
+                grounding = response.candidates[0].grounding_metadata
+                logger.info(f"WebSearch grounding_metadata: {grounding}")
+            except (IndexError, AttributeError) as e:
+                logger.info(f"WebSearch no grounding_metadata: {e}")
+                grounding = None
+
+            # Extract grounding metadata (citations / sources)
+            meta: Dict[str, Any] = {"web_search": {"query": query}}
+            if grounding and grounding.grounding_chunks:
+                sources = []
+                for chunk in grounding.grounding_chunks:
+                    if chunk.web:
+                        sources.append({
+                            "title": chunk.web.title,
+                            "uri": chunk.web.uri,
+                        })
+                if sources:
+                    meta["web_search"]["sources"] = sources
+                    logger.info(f"WebSearch sources: {sources}")
 
             return ToolResult(
                 tool_name=self.name,
                 success=True,
-                meta={"web_search": {"query": query}},
+                meta=meta,
                 content_for_llm=f"[Web Search Results for: {query}]\n{result_text}",
             )
 

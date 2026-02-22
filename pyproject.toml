@@ -11,6 +11,7 @@ langchain-core = "*"
 langchain = "*"
 langchain-openai = "*"
 langchain-google-genai = "^2.0.0"
+google-genai = "*"
 openai = "*"
 fastapi = "*"
 uvicorn = { extras = ["standard"], version = "*" }
