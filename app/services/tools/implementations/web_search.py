@@ -42,38 +42,37 @@ class WebSearchTool(BaseTool):
         logger.info(f"WebSearch executing: {query}")
 
         try:
+            # Build search prompt with client datetime context
+            search_prompt = query
+            if context and context.get("client_datetime"):
+                search_prompt = f"Current date and time: {context['client_datetime']}\n\n{query}"
+
             response = await _client.aio.models.generate_content(
                 model=SEARCH_MODEL,
-                contents=query,
+                contents=search_prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
                 ),
             )
 
             result_text = response.text if response.text else "検索結果が見つかりませんでした。"
-            logger.info(f"WebSearch result text: {result_text}")
-
-            # Debug: log full grounding metadata
-            try:
-                grounding = response.candidates[0].grounding_metadata
-                logger.info(f"WebSearch grounding_metadata: {grounding}")
-            except (IndexError, AttributeError) as e:
-                logger.info(f"WebSearch no grounding_metadata: {e}")
-                grounding = None
 
             # Extract grounding metadata (citations / sources)
             meta: Dict[str, Any] = {"web_search": {"query": query}}
-            if grounding and grounding.grounding_chunks:
-                sources = []
-                for chunk in grounding.grounding_chunks:
-                    if chunk.web:
-                        sources.append({
-                            "title": chunk.web.title,
-                            "uri": chunk.web.uri,
-                        })
-                if sources:
-                    meta["web_search"]["sources"] = sources
-                    logger.info(f"WebSearch sources: {sources}")
+            try:
+                grounding = response.candidates[0].grounding_metadata
+                if grounding and grounding.grounding_chunks:
+                    sources = []
+                    for chunk in grounding.grounding_chunks:
+                        if chunk.web:
+                            sources.append({
+                                "title": chunk.web.title,
+                                "uri": chunk.web.uri,
+                            })
+                    if sources:
+                        meta["web_search"]["sources"] = sources
+            except (IndexError, AttributeError):
+                pass
 
             return ToolResult(
                 tool_name=self.name,

@@ -125,6 +125,7 @@ async def conversation_stream(
     all_user_tasks: Optional[List[Task]] = None,
     message_history: Optional[Sequence[MessageLike]] = None,
     current_user_id: Optional[str] = None,
+    client_context: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream conversation AI response with Tool Use Loop."""
     supabase_client = get_supabase_client()
@@ -162,8 +163,9 @@ async def conversation_stream(
             daily_summary_context=daily_summary_context,
             task_list_for_suggestion=task_list_for_suggestion,
             file_context=file_context,
+            client_context=client_context,
         )
-        messages.append({"role": "system", "content": system_content})
+        messages.insert(0, {"role": "system", "content": system_content})
 
         logger.info(f"[Conversation] model={STREAM_CHAT_MODEL} thread={thread_id} timer_completed={timer_completed} notification={notification_triggered}")
 
@@ -176,7 +178,11 @@ async def conversation_stream(
             bind_tools_list = tool_registry.get_bind_tools_list()
             executor = ToolExecutor(tool_registry)
 
-            tool_context = {"user_id": current_user_id} if current_user_id else None
+            tool_context: Optional[Dict[str, Any]] = {}
+            if current_user_id:
+                tool_context["user_id"] = current_user_id
+            if client_context and client_context.get("datetime"):
+                tool_context["client_datetime"] = client_context["datetime"]
 
             async for chunk, kind, meta in _run_tool_loop(
                 llm_service, messages, bind_tools_list, executor, tool_context=tool_context

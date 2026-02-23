@@ -95,6 +95,7 @@ def build_conversation_prompt(
     daily_summary_context: Optional[str] = None,
     task_list_for_suggestion: Optional[List[Dict]] = None,
     file_context: Optional[str] = None,
+    client_context: Optional[Dict] = None,
 ) -> str:
     """
     Build conversation AI system prompt.
@@ -102,9 +103,14 @@ def build_conversation_prompt(
     """
     base_prompt = CONVERSATION_BASE_PROMPT
 
-    # Add current time
-    current_time = get_current_datetime_ja()
-    base_prompt += f"\n\nCurrent time: {current_time}"
+    # Add current time and location context
+    if client_context and client_context.get("datetime"):
+        tz = client_context.get('timezone', 'unknown')
+        base_prompt += f"\nToday's date and current time: {client_context['datetime']}"
+        base_prompt += f"\nUser's location (timezone): {tz}"
+    else:
+        current_time = get_current_datetime_ja()
+        base_prompt += f"\nToday's date and current time: {current_time}"
 
     # Add file context if available
     if file_context:
