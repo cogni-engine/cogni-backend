@@ -24,11 +24,17 @@ class SimpleMessage(BaseModel):
     file_ids: Optional[List[int]] = None
 
 
+class ClientContext(BaseModel):
+    datetime: Optional[str] = None  # ISO 8601 from client
+    timezone: Optional[str] = None  # IANA timezone e.g. "Asia/Tokyo"
+
+
 class ConversationStreamRequest(BaseModel):
     thread_id: int
     messages: List[SimpleMessage]
     notification_id: Optional[int] = None
     timer_completed: Optional[bool] = None
+    client_context: Optional[ClientContext] = None
 
 
 @router.post("/conversations/stream")
@@ -126,6 +132,7 @@ async def stream_conversation(
             all_user_tasks=pending_tasks,
             message_history=request.messages,
             current_user_id=current_user_id,
+            client_context=request.client_context.model_dump() if request.client_context else None,
         ),
         media_type="text/event-stream",
         headers={
