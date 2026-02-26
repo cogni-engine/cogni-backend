@@ -153,7 +153,9 @@ class GenerateNotificationsResponse(BaseModel):
 
 @router.post("/{task_id}/notifications", response_model=GenerateNotificationsResponse)
 async def generate_notifications_for_task(task_id: int, request: GenerateNotificationsRequest):
-    """Generate AI notifications for a specific task"""
+    """DEPRECATED: 旧パイプラインでの通知生成。現在未使用。
+    代替: Memory Service の Step 2/3 で自動生成・最適化される。
+    """
     service = RecurringTaskService(supabase)
     task = await service.get_task(task_id)
     

@@ -31,15 +31,12 @@ async def _process_notes_sync(
     exclude_user_ids: bool = False
 ) -> dict:
     """
-    ノート同期の共通処理
-    
-    Args:
-        minutes_ago: 何分前から更新されたノートを取得するか
-        user_id_filter: 指定されたuser_idのworkspaceのノートのみ処理（Noneの場合は全て）
-        exclude_user_ids: Trueの場合、user_id_filterに含まれるuser_idを除外
-    
-    Returns:
-        処理結果の統計情報
+    DEPRECATED: 旧ノート同期パイプライン。現在未使用。
+    Memory Service（/api/memory/sync-events）に置き換え済み。
+    削除予定。新規利用禁止。
+
+    旧処理: ノート → generate_tasks_from_note → generate_notifications_from_tasks_batch
+    新処理: ノート → SourceDiff → MemoryService.process_events (4ステップパイプライン)
     """
     from datetime import datetime, timedelta, timezone
     from app.infra.supabase.repositories.notes import NoteRepository
@@ -165,10 +162,8 @@ async def _process_notes_sync(
 @router.post("/sync-memories")
 async def sync_memories():
     """
-    本番用CRON実行エンドポイント（5分ごと）
-    - 5分前から現在までに更新されたノートのみを処理
-    - 開発者のworkspaceを除外
-    - ノート→タスク生成→通知生成（一連の流れを完結）
+    DEPRECATED: 旧本番用CRONエンドポイント。現在未使用。
+    代替: /api/memory/sync-events（Memory Serviceベースの新パイプライン）
     """
     return await _process_notes_sync(
         minutes_ago=5,
@@ -180,10 +175,8 @@ async def sync_memories():
 @router.post("/sync-memories-local")
 async def sync_memories_local():
     """
-    ローカル開発用CRON実行エンドポイント（1分ごと）
-    - 1分前から現在までに更新されたノートのみを処理
-    - 開発者のworkspaceのみを処理
-    - ノート→タスク生成→通知生成（一連の流れを完結）
+    DEPRECATED: 旧ローカル開発用CRONエンドポイント。現在未使用。
+    代替: /api/memory/sync-events（Memory Serviceベースの新パイプライン）
     """
     return await _process_notes_sync(
         minutes_ago=1,

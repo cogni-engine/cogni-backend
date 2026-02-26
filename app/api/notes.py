@@ -20,7 +20,9 @@ class GenerateTasksResponse(BaseModel):
 
 @router.post("/{note_id}/tasks", response_model=GenerateTasksResponse)
 async def generate_tasks_for_note(note_id: int, request: GenerateTasksRequest):
-    """Generate AI tasks from a specific note"""
+    """DEPRECATED: 旧パイプラインでのタスク生成。現在未使用。
+    代替: /api/memory/{workspace_id}/events（Memory Serviceベースの新パイプライン）
+    """
     from app.infra.supabase.repositories.notes import NoteRepository
     
     note_repo = NoteRepository(supabase)
