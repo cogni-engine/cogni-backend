@@ -11,13 +11,12 @@ logging.basicConfig(
 
 from fastapi import FastAPI, APIRouter  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from app.api import cogno, notes, tasks, webhooks, push_notifications, users, note_ai_editor, onboarding, organizations, memory  # noqa: E402
-from app.features import ai_notifications, billing  # noqa: E402
-from app.services.tools.implementations import register_all_tools  # noqa: E402
+from app.api import push_notifications, users, organizations  # noqa: E402
+from app.features import billing  # noqa: E402
 
 app = FastAPI(
     title="Cogni Backend API",
-    description="Backend API for Cogni - AI-powered task and note management",  
+    description="Backend API for Cogni - lightweight API server for billing, push notifications, and user management",
     version="1.0.0"
 )
 
@@ -70,24 +69,13 @@ app.add_middleware(
 
 # Create API router and include all sub-routers
 api_router = APIRouter()
-api_router.include_router(cogno.router)
-api_router.include_router(notes.router)
-api_router.include_router(tasks.router)
-api_router.include_router(webhooks.router)
 api_router.include_router(push_notifications.router)
 api_router.include_router(users.router)
-api_router.include_router(note_ai_editor.router)
-api_router.include_router(onboarding.router)
 api_router.include_router(organizations.router)
-api_router.include_router(memory.router)
-api_router.include_router(ai_notifications.router)
 api_router.include_router(billing.router)
 
 # Include all API routes
 app.include_router(api_router)
-
-# Register all tools at startup
-register_all_tools()
 
 
 @app.get("/")

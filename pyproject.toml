@@ -7,19 +7,12 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.13"
-langchain-core = "*"
-langchain = "*"
-langchain-openai = "*"
-langchain-google-genai = "^2.0.0"
-google-genai = "*"
-openai = "*"
 fastapi = "*"
 uvicorn = { extras = ["standard"], version = "*" }
 supabase = "*"
 python-dotenv = "*"
 pydantic = "^2.0"
 httpx = "*"
-croniter = "*"
 python-jose = {extras = ["cryptography"], version = "*"}
 stripe = "*"
 email-validator = "*"
