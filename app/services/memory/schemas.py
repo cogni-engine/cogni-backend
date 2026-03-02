@@ -39,6 +39,10 @@ class TaskUpdateItem(BaseModel):
     task_id: int = Field(description="更新対象のTaskID")
     title: Optional[str] = Field(None, description="更新後タイトル。変更不要ならNone")
     description: str = Field(description="整理・統合された説明文。全情報を保持")
+    assignees: List[int] = Field(
+        default_factory=list,
+        description="アサインするワークスペースメンバーIDのリスト。working_memoryのメンバー情報を参照",
+    )
 
 
 class NewTaskItem(BaseModel):
@@ -47,6 +51,10 @@ class NewTaskItem(BaseModel):
     source_id: int = Field(description="紐づくソースID")
     title: str = Field(description="ソースのタイトルと内容を踏まえた、明確で実行可能なタスクタイトル（50文字以内）")
     description: str = Field(description="ソース内容の構造化された要約")
+    assignees: List[int] = Field(
+        default_factory=list,
+        description="アサインするワークスペースメンバーIDのリスト。working_memoryのメンバー情報を参照",
+    )
 
 
 class TaskResolveResponse(BaseModel):

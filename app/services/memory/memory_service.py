@@ -320,7 +320,8 @@ class MemoryService:
                 logger.warning(f"[Step1] INVALID task_id={item.task_id} from LLM, skipping")
                 continue
 
-            update_data = TaskUpdate(description=item.description)
+            assignees = await self._build_assignee_dicts(item.assignees, members)
+            update_data = TaskUpdate(description=item.description, assignees=assignees)
             if item.title:
                 update_data.title = item.title
 
@@ -349,9 +350,7 @@ class MemoryService:
                 )
                 continue
 
-            assignees = await self._resolve_assignees(
-                workspace_id, item.source_type, item.source_id
-            )
+            assignees = await self._build_assignee_dicts(item.assignees, members)
             create_data = TaskCreate(
                 title=item.title,
                 workspace_id=workspace_id,
@@ -398,8 +397,8 @@ class MemoryService:
 
         # 全タスクをまとめてフォーマット（リアクション履歴を含む全文を渡す）
         tasks_info = "\n\n---\n\n".join([
-            f"TaskID: {t.id}\nTitle: {t.title}\n"
-            f"Description: {t.description or ''}"
+            f"TaskID: {t.id}\nSourceType: {t.source_type or ''}\n"
+            f"Title: {t.title}\nDescription: {t.description or ''}"
             for t in affected_tasks
         ])
 
@@ -692,6 +691,20 @@ class MemoryService:
         for r in reactions:
             desc = f'"{r.reaction_text}"' if r.reaction_text else "無視（反応なし）"
             parts.append(f"Notification reaction (id={r.notification_id})\n  Reaction: {desc}")
+
+        # Include member list on first run (when working_memory is empty)
+        if not old_content:
+            members = await self._workspace_member_repo.find_by_workspace(workspace_id)
+            if members:
+                names = await self._fetch_member_names([m.id for m in members])
+                member_lines = [
+                    f"  - id:{m.id} {names.get(m.id, 'Unknown')}"
+                    for m in members
+                ]
+                parts.append(
+                    "Workspace Members:\n" + "\n".join(member_lines)
+                )
+
         events_summary = "\n\n".join(parts) or "No events"
 
         logger.info(
@@ -726,32 +739,41 @@ class MemoryService:
     # ヘルパー
     # ------------------------------------------------------------------
 
-    async def _resolve_assignees(
-        self, workspace_id: int, source_type: Optional[str], source_id: Optional[int]
+    async def _build_assignee_dicts(
+        self, assignee_ids: List[int], members: List
     ) -> List[Dict[str, Any]]:
-        """タスクのアサイニーを解決する。
+        """Convert LLM-determined workspace_member_id list to assignee dicts.
 
-        - パーソナルWS: ワークスペースの唯一のメンバーを自動アサイン
-        - グループWS: workspace_member_note の assignee を取得。なければ空リスト
+        Falls back to all members if assignee_ids is empty.
         """
-        ws = await self._workspace_repo.find_by_id(workspace_id)
+        if not assignee_ids:
+            # Fallback: assign to all members
+            names = await self._fetch_member_names([m.id for m in members])
+            return [
+                {"workspace_member_id": m.id, "name": names.get(m.id, "")}
+                for m in members
+            ]
 
-        if ws and ws.type == "personal":
-            members = await self._workspace_member_repo.find_by_workspace(workspace_id)
-            raw = [{"workspace_member_id": m.id} for m in members]
-        else:
-            if source_type == "note" and source_id:
-                pairs = await self._note_repo.get_note_assignee_user_and_member_ids(source_id)
-                raw = [{"workspace_member_id": mid} for _, mid in pairs]
-            else:
-                raw = []
+        # Validate against actual members
+        valid_member_ids = {m.id for m in members}
+        valid_ids = [mid for mid in assignee_ids if mid in valid_member_ids]
 
-        if raw:
-            names = await self._fetch_member_names([a["workspace_member_id"] for a in raw])
-            for a in raw:
-                a["name"] = names.get(a["workspace_member_id"], "")
+        if not valid_ids:
+            logger.warning(
+                f"[Step1] No valid assignee_ids from LLM ({assignee_ids}), "
+                f"falling back to all members"
+            )
+            names = await self._fetch_member_names([m.id for m in members])
+            return [
+                {"workspace_member_id": m.id, "name": names.get(m.id, "")}
+                for m in members
+            ]
 
-        return raw
+        names = await self._fetch_member_names(valid_ids)
+        return [
+            {"workspace_member_id": mid, "name": names.get(mid, "")}
+            for mid in valid_ids
+        ]
 
     async def _fetch_member_names(self, member_ids: List[int]) -> Dict[int, str]:
         """workspace_member ID リストから名前を取得する。"""

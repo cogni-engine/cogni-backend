@@ -29,7 +29,17 @@ task_resolve_prompt = ChatPromptTemplate.from_messages([
         "  - Description: structured summary of the source content, not a full copy\n"
         "- ONLY use task_ids from the provided existing tasks\n"
         "- ONLY create tasks for sources listed in sources_without_tasks\n"
-        "- Respond in the SAME LANGUAGE as the input content",
+        "- Respond in the SAME LANGUAGE as the input content\n\n"
+        "ASSIGNEE RULES:\n"
+        "- assignees: workspace_member_id のリストで、タスクの担当者を指定せよ\n"
+        "- 会話の文脈から誰がそのタスクを実行すべきかを判断せよ "
+        "（誰に頼んでいるか、誰が引き受けたか、etc.）\n"
+        "- working_memory の「メンバー」セクションに workspace_member_id と名前・"
+        "役割が記載されている。これを参照して適切な担当者を選べ\n"
+        "- 明確な担当者が言及されていない場合は、"
+        "working_memory の役割情報から最も適切な人を選べ\n"
+        "- 担当者が不明な場合は、全メンバーをアサインせよ\n"
+        "- updates でも creates でも必ず assignees を設定せよ",
     ),
     (
         "human",
@@ -100,6 +110,16 @@ task_notification_prompt = ChatPromptTemplate.from_messages([
         "- If a task has been repeatedly postponed or ignored, "
         "it is LOW priority — generate 0 notifications or schedule far in the future (next day+).\n"
         "- NEVER generate a notification with the same content as one the user just reacted to.\n\n"
+        "WORKSPACE MESSAGE TASK RULES (CRITICAL):\n"
+        "- source_type='workspace_message' 由来のタスクは、"
+        "会話で既にやりとり済みの内容であるため即時通知は不要\n"
+        "- WS Message 由来タスクの通知は以下の場合のみ生成:\n"
+        "  - タスク作成から十分な時間が経過し、状況が不明な場合（フォローアップ型）\n"
+        "  - ユーザーが返答していない/放置している場合\n"
+        "  - フォローアップが必要と判断される場合\n"
+        "- description 中のリアクション履歴を見て、"
+        "ユーザーが既に反応済みなら追加通知は不要\n"
+        "- WS Message 由来タスクの初回通知は、最短でも数時間後にスケジュールせよ\n\n"
         "REACTED_AT RULES:\n"
         "- reacted_at = when to check if the user responded. Set relative to due_date.\n"
         "- If reaction_choices is null → reacted_at MUST be null\n"
@@ -192,7 +212,18 @@ working_memory_summary_prompt = ChatPromptTemplate.from_messages([
         "- Merge new information with existing content — don't just append\n"
         "- Remove outdated information\n"
         "- This memory represents the WHOLE workspace, not a single note\n"
-        "- Respond in the SAME LANGUAGE as the existing content (or the event content if new)",
+        "- Respond in the SAME LANGUAGE as the existing content (or the event content if new)\n\n"
+        "MEMBER INFO RULES (CRITICAL):\n"
+        "- 必ず「## メンバー」セクションを含めよ\n"
+        "- 各メンバーの workspace_member_id、名前、役割、担当領域を記録・維持せよ\n"
+        "- 会話内容やタスクのアサイン状況からメンバーの役割を推定して記録\n"
+        "- workspace_member_id は Step 1 の assignee 判断に使われるため、必ず明記せよ\n"
+        "- 初回のイベント処理時にメンバー一覧が提供される場合がある。"
+        "これを「## メンバー」セクションに記録せよ\n"
+        "- 例:\n"
+        "  ## メンバー\n"
+        "  - id:42 田中太郎 - エンジニア、フロントエンド担当\n"
+        "  - id:43 鈴木花子 - デザイナー、UI/UX担当",
     ),
     (
         "human",

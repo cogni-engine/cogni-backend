@@ -39,6 +39,7 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     source_type: Optional[str] = None
     source_id: Optional[int] = None
+    assignees: Optional[List] = None
 
 
 class Task(TaskBase):
