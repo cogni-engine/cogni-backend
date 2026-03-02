@@ -154,4 +154,4 @@ class NotificationOptimizeResponse(BaseModel):
 class WorkingMemorySummaryResponse(BaseModel):
     """working_memory の更新内容"""
     ai_context: str = Field(description="思考プロセス（非表示）")
-    content: str = Field(description="更新されたworking_memory content（2000文字以内のmarkdown）")
+    content: str = Field(description="更新されたworking_memory content（4000文字以内のmarkdown）")

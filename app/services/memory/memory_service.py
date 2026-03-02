@@ -692,20 +692,17 @@ class MemoryService:
             desc = f'"{r.reaction_text}"' if r.reaction_text else "無視（反応なし）"
             parts.append(f"Notification reaction (id={r.notification_id})\n  Reaction: {desc}")
 
-        # Include member list on first run (when working_memory is empty)
-        if not old_content:
-            members = await self._workspace_member_repo.find_by_workspace(workspace_id)
-            if members:
-                names = await self._fetch_member_names([m.id for m in members])
-                member_lines = [
-                    f"  - id:{m.id} {names.get(m.id, 'Unknown')}"
-                    for m in members
-                ]
-                parts.append(
-                    "Workspace Members:\n" + "\n".join(member_lines)
-                )
-
         events_summary = "\n\n".join(parts) or "No events"
+
+        # Always include member list so LLM can maintain accurate member info
+        members = await self._workspace_member_repo.find_by_workspace(workspace_id)
+        if members:
+            names = await self._fetch_member_names([m.id for m in members])
+            members_info = "\n".join(
+                f"- id:{m.id} {names.get(m.id, 'Unknown')}" for m in members
+            )
+        else:
+            members_info = "None"
 
         logger.info(
             f"[Step4] Input:\n"
@@ -720,6 +717,7 @@ class MemoryService:
         result = await memory_summary_chain.ainvoke({
             "current_datetime": current_datetime,
             "current_content": old_content or "Empty (first event)",
+            "members_info": members_info,
             "events_summary": events_summary,
             "notifications_schedule": notifications_schedule,
             "tasks_created": tasks_created,
