@@ -694,15 +694,9 @@ class MemoryService:
 
         events_summary = "\n\n".join(parts) or "No events"
 
-        # Always include member list so LLM can maintain accurate member info
+        # Always include member list with task assignments for person-centric memory
         members = await self._workspace_member_repo.find_by_workspace(workspace_id)
-        if members:
-            names = await self._fetch_member_names([m.id for m in members])
-            members_info = "\n".join(
-                f"- id:{m.id} {names.get(m.id, 'Unknown')}" for m in members
-            )
-        else:
-            members_info = "None"
+        members_info = await self._build_enriched_members_info(workspace_id, members)
 
         logger.info(
             f"[Step4] Input:\n"
@@ -772,6 +766,52 @@ class MemoryService:
             {"workspace_member_id": mid, "name": names.get(mid, "")}
             for mid in valid_ids
         ]
+
+    async def _build_enriched_members_info(
+        self, workspace_id: int, members: List
+    ) -> str:
+        """Build enriched members_info with per-member task assignments."""
+        if not members:
+            return "None"
+
+        names = await self._fetch_member_names([m.id for m in members])
+
+        # Get all tasks for this workspace
+        response = (
+            supabase.table("tasks")
+            .select("id, title, source_type, assignees")
+            .eq("workspace_id", workspace_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        all_tasks = response.data or []
+
+        # Build per-member task list
+        member_tasks: Dict[int, List[str]] = {}
+        for task in all_tasks:
+            for assignee in task.get("assignees") or []:
+                mid = assignee.get("workspace_member_id")
+                if mid:
+                    label = f"[{task.get('source_type', 'unknown')}] {task.get('title', '')}"
+                    member_tasks.setdefault(mid, []).append(label)
+
+        lines: List[str] = []
+        for m in members:
+            mid = m.id
+            name = names.get(mid, "Unknown")
+            line = f"- id:{mid} {name}"
+            tasks = member_tasks.get(mid, [])
+            if tasks:
+                line += f" (担当タスク {len(tasks)}件)"
+                for t in tasks[:5]:
+                    line += f"\n    - {t}"
+                if len(tasks) > 5:
+                    line += f"\n    - ...他 {len(tasks) - 5}件"
+            else:
+                line += " (担当タスクなし)"
+            lines.append(line)
+
+        return "\n".join(lines)
 
     async def _fetch_member_names(self, member_ids: List[int]) -> Dict[int, str]:
         """workspace_member ID リストから名前を取得する。"""
